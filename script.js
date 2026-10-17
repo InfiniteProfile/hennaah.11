@@ -65,6 +65,12 @@
       mark.innerHTML = '<svg viewBox="0 0 24 24" focusable="false"><rect x="8" y="3" width="13" height="15" rx="2"></rect><rect x="3" y="7" width="13" height="14" rx="2"></rect></svg>'; button.append(mark);
       const count = document.createElement("span"); count.className = "group-count"; count.textContent = String(post.files.length); count.setAttribute("aria-hidden", "true"); button.append(count);
     }
+    if (post.type === "video") {
+      const warm = () => warmPost(post);
+      button.addEventListener("pointerenter", warm, { once: true });
+      button.addEventListener("touchstart", warm, { once: true, passive: true });
+      button.addEventListener("focus", warm, { once: true });
+    }
     button.addEventListener("click", () => {
       // Promote the exact tile the viewer clicked, then prioritize its full-size original.
       const tileMedia = button.querySelector(".grid-media");
@@ -82,28 +88,81 @@
     }
     const src = el.dataset.src; delete el.dataset.src;
     if (el.tagName === "VIDEO") {
-      // Decode a real frame for each visible video tile, but do not play audio or keep it running.
-      // Only visible/near-visible videos get this request; virtualized rows release it when removed.
-      el.preload = prioritize ? "auto" : "metadata";
-      el.addEventListener("loadedmetadata", () => {
-        if (!el.isConnected || !Number.isFinite(el.duration) || el.duration <= 0) return;
-        try { el.currentTime = Math.min(0.12, el.duration / 3); } catch (_) {}
-      }, { once: true });
-      el.addEventListener("seeked", () => {
-        if (!el.isConnected) return;
-        el.classList.add("video-frame-ready");
-        try { el.pause(); } catch (_) {}
-      }, { once: true });
-      el.addEventListener("loadeddata", () => {
-        if (el.isConnected) el.classList.add("video-frame-ready");
-      }, { once: true });
-      el.addEventListener("error", () => { if (el.isConnected) el.closest(".grid-item")?.classList.add("media-unavailable"); }, { once: true });
-      el.src = src;
-      try { el.load(); } catch (_) {}
+      el._src = src;
+      if (prioritize) startVideoTile(el); else { tileQueue.push(el); pumpTiles(); }
     } else {
       el.src = src;
       el.addEventListener("error", () => { if (el.isConnected) { el.closest(".grid-item")?.classList.add("media-unavailable"); el.removeAttribute("src"); } }, { once: true });
     }
+  }
+
+
+  // ---- Video loading engine -------------------------------------------------
+  // Grid tiles: only a few videos fetch at once (first frame only), so the reel the person
+  // is about to watch is never starved of bandwidth. Queue pauses while the viewer is open.
+  const tileQueue = []; let tileActive = 0, tilePaused = false;
+  const TILE_MAX = 4;
+  const posterCache = new Map();           // post id -> dataURL of first frame
+  function pumpTiles() {
+    while (!tilePaused && tileActive < TILE_MAX && tileQueue.length) {
+      const el = tileQueue.shift();
+      if (el.isConnected && el._src) startVideoTile(el);
+    }
+  }
+  function capturePoster(el) {
+    const id = el.closest(".grid-item")?.dataset.id;
+    if (!id || posterCache.has(id) || !el.videoWidth) return;
+    try {
+      const c = document.createElement("canvas"), w = Math.min(540, el.videoWidth);
+      c.width = w; c.height = Math.round(w * el.videoHeight / el.videoWidth);
+      c.getContext("2d").drawImage(el, 0, 0, c.width, c.height);
+      posterCache.set(id, c.toDataURL("image/jpeg", 0.78));
+    } catch (_) {}
+  }
+  function startVideoTile(el) {
+    const src = el._src; if (!src) return; el._src = null;
+    tileActive++;
+    let finished = false, retried = false;
+    const finish = () => { if (finished) return; finished = true; tileActive = Math.max(0, tileActive - 1); pumpTiles(); };
+    const ready = () => {
+      if (el.isConnected) { el.classList.add("video-frame-ready"); capturePoster(el); try { el.pause(); } catch (_) {} }
+      el.preload = "metadata"; finish();
+    };
+    el.preload = "metadata";
+    el.crossOrigin = "anonymous";            // lets us copy the frame to a poster image
+    el.addEventListener("loadeddata", ready, { once: true });
+    el.addEventListener("seeked", ready, { once: true });
+    el.addEventListener("error", () => {
+      if (!retried && el.crossOrigin) {      // CORS problem? retry plain, thumbnail still works
+        retried = true; el.removeAttribute("crossorigin"); el.src = src + "#t=0.1"; try { el.load(); } catch (_) {}
+        return;
+      }
+      if (el.isConnected) el.closest(".grid-item")?.classList.add("media-unavailable");
+      finish();
+    });
+    setTimeout(finish, 9000);
+    el.src = src + "#t=0.1";                 // #t=0.1 makes the browser show a real frame, not black
+    try { el.load(); } catch (_) {}
+  }
+
+  // Pre-warm: the reels most likely to be watched next (hovered/touched tile, next and
+  // previous reel in the viewer) get a hidden <video preload=auto> so bytes are cached.
+  const warmPool = new Map(); const WARM_MAX = 3;
+  function warmPost(post) {
+    if (!post || post.type !== "video" || warmPool.has(post.id)) return;
+    if (warmPool.size >= WARM_MAX) {
+      const oldest = warmPool.keys().next().value, v = warmPool.get(oldest);
+      try { v.removeAttribute("src"); v.load(); } catch (_) {}
+      warmPool.delete(oldest);
+    }
+    const v = document.createElement("video");
+    v.muted = true; v.playsInline = true; v.preload = "auto";
+    v.src = mediaUrl(post.files[0]); try { v.load(); } catch (_) {}
+    warmPool.set(post.id, v);
+  }
+  function warmNeighbours(post) {
+    const list = filter === "videos" ? videos : posts, i = list.findIndex(p => p.id === post.id);
+    for (const p of [list[i + 1], list[i + 2], list[i - 1]]) warmPost(p);
   }
 
   let virtualStart = -1, virtualEnd = -1, virtualFrame = 0;
@@ -232,16 +291,40 @@
     if (isVideo(file)) {
       const video = document.createElement("video");
       video.controls = true; video.playsInline = true; video.preload = "auto"; video.controlsList = "nodownload";
+      video.setAttribute("playsinline", ""); video.setAttribute("webkit-playsinline", "");
       video.setAttribute("aria-label", "Reel video"); video.className = "opened-video"; video.style.objectFit = "contain";
-      video.addEventListener("loadeddata", () => { if (video.isConnected && opened && activeId === post.id) viewerMedia.replaceChildren(video); }, { once: true });
+      const poster = posterCache.get(post.id); if (poster) video.poster = poster;
+      // Show the thumbnail (poster / first frame) at once instead of a blank spinner screen.
+      const wrap = document.createElement("div"); wrap.className = "video-stage";
+      const spin = document.createElement("div"); spin.className = "video-buffering"; spin.innerHTML = '<span class="spinner" aria-hidden="true"></span>';
+      const playBtn = document.createElement("button"); playBtn.type = "button"; playBtn.className = "video-bigplay"; playBtn.setAttribute("aria-label", "Play reel"); playBtn.hidden = true;
+      playBtn.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5v14l11-7z"></path></svg>';
+      wrap.append(video, spin, playBtn); viewerMedia.replaceChildren(wrap);
+      const busy = on => { spin.style.display = on ? "flex" : "none"; };
+      const current = () => video.isConnected && opened && activeId === post.id && activeMediaIndex === fileIndex;
+      const tryPlay = () => {
+        const p = video.play();
+        if (p && p.catch) p.catch(() => {
+          video.muted = true;
+          const q = video.play(); if (q && q.catch) q.catch(() => { busy(false); playBtn.hidden = false; });
+        });
+      };
+      playBtn.addEventListener("click", () => { playBtn.hidden = true; video.muted = false; tryPlay(); });
+      video.addEventListener("waiting", () => busy(true));
+      video.addEventListener("seeking", () => busy(true));
+      for (const ev of ["playing", "canplay", "seeked"]) video.addEventListener(ev, () => busy(false));
+      video.addEventListener("playing", () => { playBtn.hidden = true; });
+      video.addEventListener("loadedmetadata", () => { if (current() && !poster) { try { if (video.paused && video.currentTime === 0) video.currentTime = 0.1; } catch (_) {} } }, { once: true });
+      video.addEventListener("canplay", () => { if (current() && video.paused) tryPlay(); }, { once: true });
       video.addEventListener("error", () => {
-        if (!video.isConnected || !opened || activeId !== post.id) return;
+        if (!current()) return;
         const err = document.createElement("div"); err.className = "media-error";
         err.textContent = "This video could not be loaded. Check that the file exists in the repository and is supported by your browser.";
         viewerMedia.replaceChildren(err);
       }, { once: true });
-      viewerMedia.querySelector(".media-loading")?.append(video);
-      video.src = url; video.load();
+      const warmed = warmPool.get(post.id); if (warmed) { try { warmed.removeAttribute("src"); warmed.load(); } catch (_) {} warmPool.delete(post.id); }
+      video.src = url; busy(true); try { video.load(); } catch (_) {}
+      warmNeighbours(post);
     } else {
       const img = new Image();
       img.alt = `Hena post photograph${post.files.length > 1 ? ` ${fileIndex + 1} of ${post.files.length}` : ""}`;
@@ -266,7 +349,7 @@
   function openPost(id, updateUrl = true) {
     const post = byId.get(id); if (!post) return;
     activeId = id; activeMediaIndex = 0; opened = true; lastFocused = document.activeElement;
-    viewer.hidden = false; document.body.classList.add("viewer-open");
+    viewer.hidden = false; document.body.classList.add("viewer-open"); tilePaused = true;
     $("viewerCaption").replaceChildren(); $("viewerDate").textContent = post.timestamp || "";
     if (post.caption) {
       const username = document.createElement("span"); username.className = "caption-user"; username.textContent = "hennaah.11";
@@ -282,7 +365,7 @@
   function closeViewer(updateUrl = true) {
     if (!opened) return;
     opened = false; activeId = null; viewer.hidden = true; cleanupViewerMedia();
-    document.body.classList.remove("viewer-open");
+    document.body.classList.remove("viewer-open"); tilePaused = false; pumpTiles();
     if (updateUrl) updateUrlForPost(null, true);
     if (lastFocused && lastFocused.isConnected) lastFocused.focus({ preventScroll: true });
   }
