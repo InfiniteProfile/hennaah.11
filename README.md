@@ -77,3 +77,12 @@ No Node.js, build step, database, backend, or paid hosting is required.
 - **REELS** filters to video posts only. Videos remain separate posts and are not merged into photo carousels even when the export ID matches.
 - **PROFILE** shows the same posts in a round, cropped avatar-style gallery; open any circle to view the complete media without cropping.
 - The source filenames do not provide verified publication timestamps, so the displayed order follows the supplied filename list in reverse rather than claiming exact posting dates.
+
+
+## Latest performance and PROFILE behavior
+- Visible and near-visible thumbnails are requested first; the intersection window is 500px to help scrolling feel more immediate.
+- Clicking a tile promotes that exact thumbnail request and the viewer requests the selected original with high fetch priority.
+- POSTS keeps related same-ID photos grouped into carousels and videos as independent posts.
+- PROFILE is separate: every individual image file becomes one round, cropped photo tile. It does not group image variants, and it does not treat a multi-photo post as one profile.
+- Video files are excluded from PROFILE because this section represents photo-based profile tiles; videos remain available in POSTS and REELS.
+- Loading order is prioritized, but actual speed still depends on GitHub raw delivery, network quality, and the original media file sizes.

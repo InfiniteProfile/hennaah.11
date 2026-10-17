@@ -8,7 +8,7 @@
 
   const photos = posts.filter(post => post.type === "image");
   const videos = posts.filter(post => post.type === "video");
-  const byId = new Map(posts.map(post => [post.id, post]));
+  const byId = new Map([...posts, ...profileItems].map(post => [post.id, post]));
   let filter = "posts", visiblePosts = posts, activeId = null, opened = false, activeMediaIndex = 0;
   let gridObserver = null, lastFocused = null, pointerStartX = null;
 
@@ -61,12 +61,21 @@
       mark.innerHTML = '<svg viewBox="0 0 24 24" focusable="false"><rect x="8" y="3" width="13" height="15" rx="2"></rect><rect x="3" y="7" width="13" height="14" rx="2"></rect></svg>'; button.append(mark);
       const count = document.createElement("span"); count.className = "group-count"; count.textContent = String(post.files.length); count.setAttribute("aria-hidden", "true"); button.append(count);
     }
-    button.addEventListener("click", () => openPost(post.id, true));
+    button.addEventListener("click", () => {
+      // Promote the exact tile the viewer clicked, then prioritize its full-size original.
+      const tileMedia = button.querySelector(".grid-media");
+      if (tileMedia?.dataset.src) loadThumbnail(tileMedia, true);
+      openPost(post.id, true);
+    });
     return button;
   }
 
-  function loadThumbnail(el) {
+  function loadThumbnail(el, prioritize = false) {
     if (!el.isConnected || !el.dataset.src) return;
+    if (el.tagName === "IMG") {
+      el.fetchPriority = prioritize ? "high" : (el.fetchPriority || "low");
+      el.loading = prioritize ? "eager" : "lazy";
+    }
     const src = el.dataset.src; delete el.dataset.src;
     if (el.tagName === "VIDEO") {
       // A tiny muted preview is enough for the grid; full video loading waits until opening.
@@ -83,14 +92,18 @@
     const targets = grid.querySelectorAll("[data-src]");
     if (!("IntersectionObserver" in window)) { targets.forEach(loadThumbnail); return; }
     gridObserver = new IntersectionObserver(entries => {
-      for (const entry of entries) if (entry.isIntersecting) { loadThumbnail(entry.target); gridObserver.unobserve(entry.target); }
-    }, { rootMargin: "120px 0px", threshold: 0.01 });
+      for (const entry of entries) if (entry.isIntersecting) {
+        // Visible/near-visible tiles get requested before anything farther down the page.
+        loadThumbnail(entry.target, entry.intersectionRatio > 0);
+        gridObserver.unobserve(entry.target);
+      }
+    }, { rootMargin: "500px 0px", threshold: 0.01 });
     targets.forEach(el => gridObserver.observe(el));
   }
 
   function renderGrid(nextFilter, updateUrl = true) {
     filter = ({ photos: "posts", all: "profile" })[nextFilter] || nextFilter;
-    visiblePosts = filter === "videos" ? videos : posts;
+    visiblePosts = filter === "videos" ? videos : filter === "profile" ? profileItems : posts;
     grid.classList.toggle("profile-grid", filter === "profile");
     if (gridObserver) { gridObserver.disconnect(); gridObserver = null; }
     grid.replaceChildren();
@@ -102,7 +115,7 @@
       const active = tab.dataset.filter === filter;
       tab.classList.toggle("active", active); tab.setAttribute("aria-pressed", String(active));
     });
-    $("status").textContent = visiblePosts.length ? `${visiblePosts.length.toLocaleString()} ${filter === "videos" ? "reels" : filter === "profile" ? "profile items" : "posts"}` : "No media files in this section.";
+    $("status").textContent = visiblePosts.length ? `${visiblePosts.length.toLocaleString()} ${filter === "videos" ? "reels" : filter === "profile" ? "individual photo profiles" : "posts"}` : "No media files in this section.";
     if (updateUrl) updateUrlForPost(null, true);
     if (opened) closeViewer(false);
   }

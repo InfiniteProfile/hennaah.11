@@ -527,6 +527,11 @@ function buildPosts() {
   return result;
 }
 const posts = buildPosts();
+// PROFILE is intentionally a one-file-per-item avatar gallery. Unlike POSTS,
+// it never groups similarly named image variants into carousels.
+const profileItems = MEDIA_FILES.slice().reverse()
+  .filter(file => mediaType(file) === "image")
+  .map(file => ({ id: "profile-" + stableId(file), type: "image", files: [file], caption: "", timestamp: "" }));
 function mediaUrl(filename) {
   return MEDIA_BASE + filename.split("/").map(part => encodeURIComponent(part)).join("/");
 }
