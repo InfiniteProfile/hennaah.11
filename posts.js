@@ -532,6 +532,11 @@ const posts = buildPosts();
 const profileItems = MEDIA_FILES.slice().reverse()
   .filter(file => mediaType(file) === "image")
   .map(file => ({ id: "profile-" + stableId(file), type: "image", files: [file], caption: "", timestamp: "" }));
-function mediaUrl(filename) {
-  return MEDIA_BASE + filename.split("/").map(part => encodeURIComponent(part)).join("/");
+// Media is tried from a fast CDN first (jsDelivr: global edge cache, proper range requests),
+// and falls back to GitHub raw automatically if a file is missing/too large (>50 MB) there.
+const MEDIA_MIRRORS = ["https://cdn.jsdelivr.net/gh/InfiniteProfile/hennaah.11@main/", MEDIA_BASE];
+function mediaUrls(filename) {
+  const path = filename.split("/").map(part => encodeURIComponent(part)).join("/");
+  return MEDIA_MIRRORS.map(base => base + path);
 }
+function mediaUrl(filename) { return mediaUrls(filename)[0]; }

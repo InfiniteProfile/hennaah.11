@@ -10,7 +10,7 @@
   const videos = posts.filter(post => post.type === "video");
   const byId = new Map([...posts, ...profileItems].map(post => [post.id, post]));
   let filter = "posts", visiblePosts = posts, activeId = null, opened = false, activeMediaIndex = 0;
-  let gridObserver = null, lastFocused = null, pointerStartX = null;
+  let gridObserver = null, lastFocused = null, pointerStartX = null, pointerStartY = null;
 
   const savedTheme = (() => { try { return localStorage.getItem("hena-theme"); } catch (_) { return null; } })();
   const prefersDark = window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches;
@@ -49,6 +49,7 @@
     const media = document.createElement(isVideo(file) ? "video" : "img");
     media.className = "grid-media";
     media.dataset.src = mediaUrl(file);
+    if (isVideo(file)) media._urls = mediaUrls(file);
     if (media.tagName === "IMG") { media.alt = ""; media.loading = "lazy"; media.decoding = "async"; media.fetchPriority = "low"; }
     else {
       media.muted = true; media.defaultMuted = true; media.playsInline = true;
@@ -93,7 +94,7 @@
   // first, 3 at a time. Once a frame is captured it is kept as a tiny poster image and the video
   // connection is released. Tiles that scroll away are cancelled, so nothing piles up.
   const tileQueue = []; const loadingTiles = new Set(); let tilePaused = false;
-  const TILE_MAX = 3;
+  const TILE_MAX = 4, HEAD_BYTES = 700 * 1024;   // a thumbnail never downloads more than ~700 KB
   const posterCache = new Map();           // post id -> dataURL of first frame
   const tileId = el => el.closest(".grid-item")?.dataset.id;
 
@@ -105,7 +106,7 @@
   }
   function releaseVideoTile(el) {
     const qi = tileQueue.indexOf(el); if (qi >= 0) tileQueue.splice(qi, 1);
-    const st = el._state; loadingTiles.delete(el); el._tok = (el._tok || 0) + 1;
+    const st = el._state; loadingTiles.delete(el); el._tok = (el._tok || 0) + 1; cleanupTileSource(el);
     if (st === "loading" || st === "ready") {
       try { el.pause(); } catch (_) {}
       el.removeAttribute("src"); try { el.load(); } catch (_) {}
@@ -135,40 +136,70 @@
       posterCache.set(id, url); el.poster = url;
     } catch (_) {}
   }
+  function cleanupTileSource(el) {
+    if (el._abort) { try { el._abort.abort(); } catch (_) {} el._abort = null; }
+    if (el._blobUrl) { try { URL.revokeObjectURL(el._blobUrl); } catch (_) {} el._blobUrl = null; }
+  }
+  // Download ONLY the first HEAD_BYTES of a video (enough for the first frame when the file has its
+  // index at the start, as Instagram exports do). Works even if the server ignores Range: we stop
+  // reading and abort the request ourselves, so the rest of the file is never downloaded.
+  async function fetchHead(url, bytes, signal) {
+    const res = await fetch(url, { headers: { Range: `bytes=0-${bytes - 1}` }, signal });
+    if (!res.ok) throw new Error("HTTP " + res.status);
+    const reader = res.body.getReader(), chunks = []; let got = 0;
+    while (got < bytes) { const { done, value } = await reader.read(); if (done) break; chunks.push(value); got += value.length; }
+    try { await reader.cancel(); } catch (_) {}
+    return new Blob(chunks, { type: "video/mp4" });
+  }
   function startVideoTile(el) {
-    const src = el.dataset.src; if (!src) { el._state = null; return; }
+    const urls = el._urls || [el.dataset.src]; if (!urls[0]) { el._state = null; return; }
     const token = el._tok = (el._tok || 0) + 1;
-    let done = false, retried = false;
+    let done = false, mode = "head", seekTimer = 0;
     el._state = "loading"; loadingTiles.add(el);
+    const stale = () => done || el._tok !== token;
     const finish = ok => {
-      if (done || el._tok !== token) return;
-      done = true; clearTimeout(timer); loadingTiles.delete(el);
+      if (stale()) return;
+      done = true; clearTimeout(timer); clearTimeout(seekTimer); loadingTiles.delete(el);
       if (ok) {
         el.classList.add("video-frame-ready"); capturePoster(el);
-        if (el.poster) { el._state = "poster"; try { el.pause(); } catch (_) {} el.removeAttribute("src"); try { el.load(); } catch (_) {} }
+        if (el.poster) { el._state = "poster"; try { el.pause(); } catch (_) {} el.removeAttribute("src"); try { el.load(); } catch (_) {} cleanupTileSource(el); }
         else el._state = "ready";
       } else {
-        el._state = null; el.removeAttribute("src"); try { el.load(); } catch (_) {}
+        cleanupTileSource(el); el._state = null; el.removeAttribute("src"); try { el.load(); } catch (_) {}
         if (!el._retried) { el._retried = true; setTimeout(() => { if (el.isConnected && !el._state && !tilePaused) requestVideoTile(el); }, 2500); }
         else if (el.isConnected) el.closest(".grid-item")?.classList.add("media-unavailable");
       }
       pumpTiles();
     };
-    const timer = setTimeout(() => finish(el.readyState >= 2), 10000);
-    el.preload = "metadata";
-    el.crossOrigin = "anonymous";            // lets us copy the frame into a poster image
-    el.addEventListener("loadeddata", () => finish(true), { once: true });
+    const timer = setTimeout(() => finish(el.readyState >= 2), 12000);
+    el.preload = "metadata"; el.removeAttribute("crossorigin");
+    el.addEventListener("loadeddata", () => {
+      if (stale()) return;
+      if (el.currentTime === 0 && el.duration > 0.3) { try { el.currentTime = 0.1; seekTimer = setTimeout(() => finish(true), 1200); return; } catch (_) {} }
+      finish(true);
+    }, { once: true });
     el.addEventListener("seeked", () => finish(true), { once: true });
     el.addEventListener("error", () => {
-      if (done || el._tok !== token) return;
-      if (!retried) {                        // CORS problem? retry plain; the frame still shows
-        retried = true; el.removeAttribute("crossorigin"); el.src = src + "#t=0.1"; try { el.load(); } catch (_) {}
-        return;
-      }
-      finish(false);
+      if (stale()) return;
+      cleanupTileSource(el);
+      if (mode === "head") {                 // partial file unusable (index at the end?) -> normal loading
+        mode = "direct"; el.crossOrigin = "anonymous"; el.src = urls[0] + "#t=0.1"; try { el.load(); } catch (_) {}
+      } else if (mode === "direct") {
+        mode = "plain"; el.removeAttribute("crossorigin"); el.src = (urls[1] || urls[0]) + "#t=0.1"; try { el.load(); } catch (_) {}
+      } else finish(false);
     });
-    el.src = src + "#t=0.1";                 // #t=0.1 makes the browser show a real frame, not black
-    try { el.load(); } catch (_) {}
+    const ctrl = new AbortController(); el._abort = ctrl;
+    (async () => {
+      let blob = null;
+      for (const url of urls) {
+        try { blob = await fetchHead(url, HEAD_BYTES, ctrl.signal); break; }
+        catch (_) { if (ctrl.signal.aborted) return; }
+      }
+      if (stale()) return;
+      if (!blob || !blob.size) { el.dispatchEvent(new Event("error")); return; }
+      el._blobUrl = URL.createObjectURL(blob);
+      el.src = el._blobUrl; try { el.load(); } catch (_) {}
+    })();
   }
   function pauseTileLoading() {
     tilePaused = true;
@@ -199,7 +230,7 @@
     warmPool.set(post.id, v);
   }
   function warmNeighbours(post) {
-    const list = filter === "videos" ? videos : posts, i = list.findIndex(p => p.id === post.id);
+    const list = navList(), i = list.findIndex(p => p.id === post.id);
     for (const p of [list[i + 1], list[i - 1], list[i + 2]]) warmPost(p);
   }
 
@@ -356,12 +387,12 @@
     if (fileIndex < 0 || fileIndex >= post.files.length) return;
     activeMediaIndex = fileIndex;
     cleanupViewerMedia();
-    const file = post.files[fileIndex], url = mediaUrl(file);
+    const file = post.files[fileIndex], url = mediaUrl(file), urls = mediaUrls(file);
     showLoading(isVideo(file) ? "Loading reel…" : post.files.length > 1 ? `Loading photo ${fileIndex + 1} of ${post.files.length}…` : "Loading photo…");
     if (isVideo(file)) {
       const video = document.createElement("video");
       video.controls = true; video.playsInline = true; video.preload = "auto"; video.controlsList = "nodownload";
-      video.setAttribute("playsinline", ""); video.setAttribute("webkit-playsinline", "");
+      video.loop = true; video.setAttribute("playsinline", ""); video.setAttribute("webkit-playsinline", "");
       video.setAttribute("aria-label", "Reel video"); video.className = "opened-video"; video.style.objectFit = "contain";
       const poster = posterCache.get(post.id); if (poster) video.poster = poster;
       // Show the thumbnail (poster / first frame) at once instead of a blank spinner screen.
@@ -386,12 +417,14 @@
       video.addEventListener("playing", () => { playBtn.hidden = true; });
       video.addEventListener("loadedmetadata", () => { if (current() && !poster) { try { if (video.paused && video.currentTime === 0) video.currentTime = 0.1; } catch (_) {} } }, { once: true });
       video.addEventListener("canplay", () => { if (current() && video.paused) tryPlay(); }, { once: true });
+      let mirror = 0;
       video.addEventListener("error", () => {
         if (!current()) return;
+        if (mirror < urls.length - 1) { mirror++; busy(true); video.src = urls[mirror]; try { video.load(); } catch (_) {} return; }  // try the other server
         const err = document.createElement("div"); err.className = "media-error";
         err.textContent = "This video could not be loaded. Check that the file exists in the repository and is supported by your browser.";
         viewerMedia.replaceChildren(err);
-      }, { once: true });
+      });
       const warmed = warmPool.get(post.id); if (warmed) { try { warmed.removeAttribute("src"); warmed.load(); } catch (_) {} warmPool.delete(post.id); }
       const note = spin.querySelector(".buffer-note");
       const slow = setTimeout(() => { if (current() && video.paused && video.readyState < 3) note.textContent = "Slow connection \u2014 still loading\u2026"; }, 7000);
@@ -415,10 +448,14 @@
     }
   }
 
-  function syncPostButtons(post) {
-    const index = posts.findIndex(item => item.id === post.id);
+  function navList() {
+    const list = filter === "videos" ? videos : filter === "profile" ? profileItems : posts;
+    return list.some(p => p.id === activeId) ? list : posts;
+  }
+  function syncPostButtons() {
+    const list = navList(), index = list.findIndex(item => item.id === activeId);
     $("previousPost").disabled = index <= 0;
-    $("nextPost").disabled = index < 0 || index >= posts.length - 1;
+    $("nextPost").disabled = index < 0 || index >= list.length - 1;
   }
 
   function openPost(id, updateUrl = true) {
@@ -432,7 +469,7 @@
     }
     $("likeButton").classList.remove("liked"); $("likeButton").textContent = "♡";
     $("saveButton").classList.remove("liked");
-    showMedia(post); syncPostButtons(post);
+    showMedia(post); syncPostButtons();
     if (updateUrl) updateUrlForPost(post, true); else updateUrlForPost(post, false);
     $("linkStatus").textContent = ""; $("closeViewer").focus();
   }
@@ -445,14 +482,12 @@
     if (lastFocused && lastFocused.isConnected) lastFocused.focus({ preventScroll: true });
   }
 
+  // Up / down between posts (like Instagram reels). delta +1 = next post (swipe up), -1 = previous.
   function stepPost(delta) {
-    const index = posts.findIndex(post => post.id === activeId), next = index + delta;
-    if (next < 0 || next >= posts.length) return;
-    const post = posts[next];
-    // Switch the active filter only if needed, then prioritize the selected original media.
-    const belongs = filter === "posts" || filter === "profile" || (filter === "videos" && post.type === "video");
-    if (!belongs) renderGrid("posts", false);
-    openPost(post.id, true);
+    const list = navList(), index = list.findIndex(post => post.id === activeId), next = index + delta;
+    if (index < 0 || next < 0 || next >= list.length) return;
+    openPost(list[next].id, false);          // replace the URL instead of piling up history entries
+    try { viewerMedia.animate([{ transform: `translateY(${delta * 56}px)`, opacity: 0.2 }, { transform: "none", opacity: 1 }], { duration: 240, easing: "cubic-bezier(.2,.8,.2,1)" }); } catch (_) {}
   }
 
   document.querySelectorAll(".tab").forEach(tab => tab.addEventListener("click", () => renderGrid(tab.dataset.filter, true)));
@@ -474,15 +509,35 @@
   document.addEventListener("keydown", event => {
     if (!opened) return;
     if (event.key === "Escape") closeViewer();
-    if (event.key === "ArrowLeft") { const post = byId.get(activeId); if (post?.type === "image" && post.files.length > 1 && activeMediaIndex > 0) showMedia(post, activeMediaIndex - 1); else stepPost(-1); }
-    if (event.key === "ArrowRight") { const post = byId.get(activeId); if (post?.type === "image" && post.files.length > 1 && activeMediaIndex < post.files.length - 1) showMedia(post, activeMediaIndex + 1); else stepPost(1); }
+    const post = byId.get(activeId), carousel = post?.type === "image" && post.files.length > 1;
+    if (event.key === "ArrowDown" || event.key === "PageDown") { event.preventDefault(); stepPost(1); }
+    if (event.key === "ArrowUp" || event.key === "PageUp") { event.preventDefault(); stepPost(-1); }
+    if (carousel && event.key === "ArrowLeft" && activeMediaIndex > 0) showMedia(post, activeMediaIndex - 1);
+    if (carousel && event.key === "ArrowRight" && activeMediaIndex < post.files.length - 1) showMedia(post, activeMediaIndex + 1);
   });
-  viewerMedia.addEventListener("touchstart", event => { pointerStartX = event.changedTouches[0].clientX; }, { passive: true });
+  // Touch: swipe UP = next post, swipe DOWN = previous (reels style). Swipe left/right only moves
+  // inside a multi-photo post. Swipes that begin on the native video control bar are ignored.
+  viewerMedia.addEventListener("touchstart", event => {
+    const t = event.changedTouches[0], r = viewerMedia.getBoundingClientRect();
+    pointerStartX = t.clientX; pointerStartY = t.clientY;
+    if (event.target.closest("video") && t.clientY > r.bottom - 64) pointerStartX = pointerStartY = null;
+  }, { passive: true });
   viewerMedia.addEventListener("touchend", event => {
     if (pointerStartX === null) return;
-    const dx = event.changedTouches[0].clientX - pointerStartX; pointerStartX = null;
-    if (Math.abs(dx) > 80 && !event.target.closest("video")) { const post = byId.get(activeId); if (post?.type === "image" && post.files.length > 1) { const next = activeMediaIndex + (dx < 0 ? 1 : -1); if (next >= 0 && next < post.files.length) showMedia(post, next); else stepPost(dx < 0 ? 1 : -1); } else stepPost(dx < 0 ? 1 : -1); }
+    const t = event.changedTouches[0], dx = t.clientX - pointerStartX, dy = t.clientY - pointerStartY;
+    pointerStartX = pointerStartY = null;
+    const post = byId.get(activeId), carousel = post?.type === "image" && post.files.length > 1;
+    if (Math.abs(dy) > 60 && Math.abs(dy) > Math.abs(dx) * 1.2) stepPost(dy < 0 ? 1 : -1);
+    else if (carousel && Math.abs(dx) > 60 && Math.abs(dx) > Math.abs(dy) * 1.2) {
+      const n = activeMediaIndex + (dx < 0 ? 1 : -1); if (n >= 0 && n < post.files.length) showMedia(post, n);
+    }
   }, { passive: true });
+  // Mouse wheel / trackpad: one post per scroll gesture.
+  let wheelLock = 0;
+  viewerMedia.addEventListener("wheel", event => {
+    if (Math.abs(event.deltaY) < 20 || Date.now() < wheelLock) return;
+    wheelLock = Date.now() + 650; event.preventDefault(); stepPost(event.deltaY > 0 ? 1 : -1);
+  }, { passive: false });
 
   window.addEventListener("popstate", () => {
     const url = new URL(location.href), postId = url.searchParams.get("post");

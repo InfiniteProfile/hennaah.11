@@ -65,3 +65,32 @@ html,body{margin:0;min-height:100%;background:var(--bg);color:var(--text);font-f
 .video-bigplay svg{width:34px;height:34px;fill:#fff;margin-left:3px}
 .video-buffering{flex-direction:column;gap:10px}.buffer-note{color:#fff;font-size:12px;text-shadow:0 1px 4px #000}
 .grid-item video.grid-media[poster]{background:#161616}
+
+/* ---- Up/down post navigation (Instagram reels style) ---- */
+.viewer{overscroll-behavior:contain}
+.viewer-media{touch-action:pan-x pinch-zoom}
+.post-step{left:auto;right:12px;transform:none;display:grid;place-items:center;padding:0}
+.post-step svg{width:22px;height:22px;fill:none;stroke:#222;stroke-width:2.4;stroke-linecap:round;stroke-linejoin:round}
+.post-step.prev{top:calc(50% - 48px);left:auto;right:12px}
+.post-step.next{top:calc(50% + 8px);left:auto;right:12px}
+.post-step:hover:not(:disabled){background:#f2f2f2}
+
+/* ---- Mobile: full-screen reels layout ---- */
+@media(max-width:760px){
+  .post-step{display:none}
+  .viewer{background:#000;padding:0}
+  .post-dialog{position:relative;width:100%;height:100%;flex-direction:column;overflow:hidden;background:#000;color:#fff}
+  .viewer-media{flex:1 1 auto;min-height:0;max-height:none;height:100%;width:100%}
+  .post-sidebar{position:absolute;left:0;right:0;bottom:0;z-index:3;width:100%;min-height:0;flex:none;color:#fff;
+    background:linear-gradient(to top,rgba(0,0,0,.72),rgba(0,0,0,0));padding:46px 64px calc(58px + env(safe-area-inset-bottom)) 0;pointer-events:none}
+  .post-sidebar>*{pointer-events:auto}
+  .post-author{height:auto;border:0;padding:0 14px 6px;color:#fff}
+  .post-author small{color:rgba(255,255,255,.75)}
+  .caption-area{padding:2px 14px 0;max-height:14vh;color:#fff;font-size:14px;text-shadow:0 1px 3px #0009}
+  .sidebar-footer{display:none}
+  .post-actions{position:absolute;right:6px;bottom:calc(86px + env(safe-area-inset-bottom));flex-direction:column;border:0;padding:0;gap:6px;background:transparent}
+  .action-button{color:#fff;font-size:29px;width:46px;height:46px;display:grid;place-items:center;text-shadow:0 1px 4px #0008}
+  .action-button.liked{color:#ff3040}
+  .viewer-close{top:calc(8px + env(safe-area-inset-top));right:10px;z-index:6}
+  .video-stage video{background:#000}
+}
