@@ -34,3 +34,16 @@ html,body{margin:0;min-height:100%;background:var(--bg);color:var(--text);font-f
 .viewer-media .opened-image{max-width:100%;max-height:100%;width:auto;height:auto;object-fit:contain;object-position:center}
 @media(max-width:760px){.video-mark,.carousel-mark{top:5px;right:5px}.video-mark svg{width:24px;height:24px}.carousel-mark{width:25px;height:25px}.group-count{right:5px;bottom:5px;height:19px;min-width:21px;font-size:10px}.carousel-controls{padding:0 8px}.carousel-step{width:33px;height:33px}.carousel-counter{top:10px}}
 @media(prefers-reduced-motion:reduce){.grid-item,.carousel-step{transition:none}}
+
+
+/* Profile tab: round, cropped media tiles that read like a profile/avatar gallery. */
+.post-grid.profile-grid{grid-template-columns:repeat(4,minmax(0,1fr));gap:clamp(14px,2.5vw,28px);padding:10px clamp(12px,4vw,48px) 24px;max-width:900px;margin:0 auto}
+.post-grid.profile-grid .grid-item{aspect-ratio:1/1;border-radius:50%;overflow:hidden;border:2px solid var(--line);padding:3px;background:var(--bg);box-shadow:0 2px 10px #0000000a;transition:transform .18s ease,box-shadow .18s ease}
+.post-grid.profile-grid .grid-media{border-radius:50%;object-fit:cover}
+.post-grid.profile-grid .grid-item:hover{filter:none;transform:translateY(-2px);box-shadow:0 5px 18px #00000018}
+.post-grid.profile-grid .video-mark,.post-grid.profile-grid .carousel-mark{top:12%;right:12%;width:27px;height:27px;border-radius:50%;background:rgba(15,15,15,.68);backdrop-filter:blur(6px)}
+.post-grid.profile-grid .video-mark svg{width:20px;height:20px}
+.post-grid.profile-grid .carousel-mark svg{width:17px;height:17px}
+.post-grid.profile-grid .group-count{right:9%;bottom:9%;height:20px;min-width:20px;font-size:10px}
+@media(max-width:760px){.post-grid.profile-grid{grid-template-columns:repeat(3,minmax(0,1fr));gap:clamp(10px,3.5vw,20px);padding:8px 18px 22px}.post-grid.profile-grid .grid-item{padding:2px}.post-grid.profile-grid .video-mark,.post-grid.profile-grid .carousel-mark{width:23px;height:23px}.post-grid.profile-grid .video-mark svg{width:17px;height:17px}.post-grid.profile-grid .group-count{height:18px;min-width:18px;font-size:9px}}
+@media(max-width:380px){.post-grid.profile-grid{gap:9px;padding-inline:14px}}

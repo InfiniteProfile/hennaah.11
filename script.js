@@ -9,14 +9,14 @@
   const photos = posts.filter(post => post.type === "image");
   const videos = posts.filter(post => post.type === "video");
   const byId = new Map(posts.map(post => [post.id, post]));
-  let filter = "photos", visiblePosts = photos, activeId = null, opened = false, activeMediaIndex = 0;
+  let filter = "posts", visiblePosts = posts, activeId = null, opened = false, activeMediaIndex = 0;
   let gridObserver = null, lastFocused = null, pointerStartX = null;
 
   const savedTheme = (() => { try { return localStorage.getItem("hena-theme"); } catch (_) { return null; } })();
   const prefersDark = window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches;
   applyTheme(savedTheme || (prefersDark ? "dark" : "light"));
 
-  $("postCount").textContent = photos.length.toLocaleString();
+  $("postCount").textContent = posts.length.toLocaleString();
   $("videoCount").textContent = videos.length.toLocaleString();
 
   function applyTheme(theme) {
@@ -32,10 +32,11 @@
   }
 
   function isVideo(file) { return /\.(mp4|webm)$/i.test(file); }
+  function normalizeFilter(value) { return ({ photos: "posts", all: "profile" })[value] || value; }
   function updateUrlForPost(post, push = true) {
     const u = new URL(location.href);
     if (post) { u.searchParams.set("post", post.id); u.searchParams.delete("filter"); }
-    else { u.searchParams.delete("post"); if (filter === "photos") u.searchParams.delete("filter"); else u.searchParams.set("filter", filter); }
+    else { u.searchParams.delete("post"); if (filter === "posts") u.searchParams.delete("filter"); else u.searchParams.set("filter", filter); }
     if (push) history.pushState({ post: post ? post.id : null, filter }, "", u);
     else history.replaceState({ post: post ? post.id : null, filter }, "", u);
   }
@@ -88,8 +89,9 @@
   }
 
   function renderGrid(nextFilter, updateUrl = true) {
-    filter = nextFilter;
-    visiblePosts = filter === "videos" ? videos : filter === "all" ? posts : photos;
+    filter = ({ photos: "posts", all: "profile" })[nextFilter] || nextFilter;
+    visiblePosts = filter === "videos" ? videos : posts;
+    grid.classList.toggle("profile-grid", filter === "profile");
     if (gridObserver) { gridObserver.disconnect(); gridObserver = null; }
     grid.replaceChildren();
     const fragment = document.createDocumentFragment();
@@ -100,7 +102,7 @@
       const active = tab.dataset.filter === filter;
       tab.classList.toggle("active", active); tab.setAttribute("aria-pressed", String(active));
     });
-    $("status").textContent = visiblePosts.length ? `${visiblePosts.length.toLocaleString()} ${filter === "videos" ? "videos" : filter === "photos" ? "photos" : "media items"}` : "No media files in this section.";
+    $("status").textContent = visiblePosts.length ? `${visiblePosts.length.toLocaleString()} ${filter === "videos" ? "reels" : filter === "profile" ? "profile items" : "posts"}` : "No media files in this section.";
     if (updateUrl) updateUrlForPost(null, true);
     if (opened) closeViewer(false);
   }
@@ -199,8 +201,8 @@
     if (next < 0 || next >= posts.length) return;
     const post = posts[next];
     // Switch the active filter only if needed, then prioritize the selected original media.
-    const belongs = filter === "all" || (filter === "videos" && post.type === "video") || (filter === "photos" && post.type === "image");
-    if (!belongs) renderGrid(post.type === "video" ? "videos" : "photos", false);
+    const belongs = filter === "posts" || filter === "profile" || (filter === "videos" && post.type === "video");
+    if (!belongs) renderGrid("posts", false);
     openPost(post.id, true);
   }
 
@@ -237,18 +239,18 @@
     const url = new URL(location.href), postId = url.searchParams.get("post");
     if (postId && byId.has(postId)) {
       const post = byId.get(postId);
-      const requestedFilter = url.searchParams.get("filter") || (post.type === "video" ? "videos" : "photos");
+      const requestedFilter = normalizeFilter(url.searchParams.get("filter") || "posts");
       renderGrid(requestedFilter, false); openPost(postId, false);
     } else {
       if (opened) closeViewer(false);
-      renderGrid(url.searchParams.get("filter") || "photos", false);
+      renderGrid(normalizeFilter(url.searchParams.get("filter") || "posts"), false);
     }
   });
 
   // Render the complete filtered grid in one pass; only near-viewport thumbnails fetch media.
   const initialUrl = new URL(location.href);
   const initialPostId = initialUrl.searchParams.get("post");
-  const initialFilter = initialUrl.searchParams.get("filter") || (initialPostId && byId.get(initialPostId)?.type === "video" ? "videos" : "photos");
-  renderGrid(["photos", "videos", "all"].includes(initialFilter) ? initialFilter : "photos", false);
+  const initialFilter = normalizeFilter(initialUrl.searchParams.get("filter") || "posts");
+  renderGrid(["posts", "videos", "profile"].includes(initialFilter) ? initialFilter : "posts", false);
   if (initialPostId && byId.has(initialPostId)) openPost(initialPostId, false);
 })();

@@ -69,3 +69,11 @@ Each item has a stable URL such as `?post=media-xxxxxxxx`. Opening a post preser
 5. Visit the published Pages URL after the deployment completes.
 
 No Node.js, build step, database, backend, or paid hosting is required.
+
+
+## Updated Instagram-style sections
+
+- **POSTS** mixes photo posts, grouped photo carousels, and individual videos in one feed, as on an Instagram profile.
+- **REELS** filters to video posts only. Videos remain separate posts and are not merged into photo carousels even when the export ID matches.
+- **PROFILE** shows the same posts in a round, cropped avatar-style gallery; open any circle to view the complete media without cropping.
+- The source filenames do not provide verified publication timestamps, so the displayed order follows the supplied filename list in reverse rather than claiming exact posting dates.
