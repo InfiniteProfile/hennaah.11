@@ -1,72 +1,79 @@
-# Hena (@hennaah.11) – Instagram-style profile site
+# Hena — Instagram-inspired profile
 
-A static, dependency-free viewer for the photos and videos in
-`github.com/InfiniteProfile/hennaah.11`. It is an independent website and is not connected to Instagram.
-No build step, backend or database: upload the files and enable GitHub Pages.
+A static, GitHub Pages-compatible profile for **Hena** (`@hennaah.11`). No build tools, backend, database, or third-party JavaScript dependencies are required.
 
-| File | Purpose |
-|---|---|
-| `index.html`, `style.css`, `script.js` | Page, styling, behaviour |
-| `posts.js` | Generated dataset (485 filenames → 226 posts) plus profile settings |
-| `overrides.js` | Optional captions / dates / hidden flags, keyed by post id (empty by default) |
-| `tools/filenames.txt`, `tools/make_posts.py` | Optional: your filename list and the script that regenerates `posts.js` |
+## Source inventory and grouping
 
-## How media URLs are generated
-`MEDIA_BASE + filename`, with each path segment passed through `encodeURIComponent` (so spaces and
-parentheses are safe and filenames are never altered). Example:
-`igexport-CqTGWgsINUl (1).jpg` → `…/main/igexport-CqTGWgsINUl%20(1).jpg`.
-The profile photo uses `PROFILE_DIR` (`profile photo/`) + `PROFILE.photo`.
+- Read the entire uploaded list: **485 nonblank filename entries**.
+- Supported files: **294 JPG images** and **191 MP4 videos**.
+- Duplicate exact filename entries: **0**. All 485 entries are preserved in `MEDIA_FILES` in `posts.js`.
+- The supplied list does not include captions, dates, engagement statistics, or confirmed Instagram carousel metadata. These fields are blank unless you edit them.
+- Initial grouping is a heuristic: numbered variants (for example `name-2.jpg`) are grouped only when a filename with the unsuffixed base stem also exists. This is a convenient editable assumption, **not proof** that Instagram treated them as one carousel. Review the generated groupings before publishing if exact post relationships matter.
 
-## What was read from `text.txt`
-- 485 filenames: 294 `.jpg`, 191 `.mp4`. No blank lines, no duplicate filenames; every one is in `posts.js`.
-- Video vs photo is decided by extension (`.mp4`, `.webm` = video).
+## Files
 
-## Grouping and order are inferred (please review)
-The file is only a filename list, so **nothing here is confirmed Instagram metadata.**
-- **Grouping:** names look like `igexport-<11-character code>[-N].ext`. Files sharing a code are grouped into one
-  carousel (no suffix = item 1, then `-2`, `-3`…). This gives 59 carousels, 162 single videos and 5 single photos.
-  Three `name (1).ext` files are kept as separate posts (`<code>-copy1`) rather than merged.
-- **Order:** Instagram codes are encoded numeric IDs that increase over time, so posts are sorted newest first by
-  decoding the code. This is a reasoned fallback, not a guarantee of the original order.
-- **Not invented:** no captions, dates, likes, comments, followers or bio are shown. Fields appear only if you fill them in.
+- `index.html` — profile structure and post viewer.
+- `style.css` — responsive Instagram-inspired design.
+- `script.js` — rendering, pagination, lazy loading, viewer, carousel and interactions.
+- `posts.js` — all source filenames, URL builder and editable grouping configuration.
 
-### Fix a grouping
-Open `posts.js` and edit that post's `files` array: move a filename into another post's array to merge, or give it its own
-object (with a unique `id`) to split. Keep `id`s unchanged so existing links keep working. A post with more than one file
-is shown as a carousel; photos and videos can be mixed. Or edit `tools/filenames.txt` and run
-`python3 tools/make_posts.py` (this overwrites `posts.js`).
+## Media URL generation
 
-### Add a photo or video
-Upload the file to the repo root, then add a post to `posts.js`:
-`{ "id": "my-new-post", "type": "video", "files": ["my video.mp4"], "caption": "", "timestamp": "" }`
-(`type` is informational; it is recalculated from `files`.) New posts don't change existing ids or links.
-Use WebM/MP4 (H.264) so browsers can play it.
+`MEDIA_BASE` points to the repository's `main/` directory. `mediaUrl(filename)` splits a filename into path components and URL-encodes each component separately, so spaces and parentheses work without encoding the entire URL. For example, `folder/my photo (1).jpg` becomes `.../folder/my%20photo%20(1).jpg`. The profile image uses `profile photo/igexport-DVY7NlejDJ9-6.jpg`. Ensure every file is actually committed to that repository at the matching path.
 
-### Add captions or dates
-In `overrides.js`: `"DejBtLPDInv": { caption: "Text #tag @name", timestamp: "2024-05-12T18:30:00Z" }`.
-Hashtags and mentions are highlighted. Followers, following and bio go in `PROFILE` in `posts.js` (`null`/empty = hidden).
+## Add a filename
 
-## Behaviour
-- **Grid:** 3 square, cropped thumbnails (cropping applies only here). Video and carousel badges, no text over images.
-  Photo thumbnails use the original file with native lazy loading (no separate thumbnails exist in the repo); video
-  thumbnails fetch only their first-frame metadata when scrolled near, via `IntersectionObserver`.
-- **Post viewer:** `object-fit: contain`, never cropped, centred on a black background; side-by-side on desktop, full-screen
-  on mobile. Carousel arrows, dots, `2/5` counter, touch swipe. Videos use native controls (play, volume, progress,
-  full screen), load only when the post opens and are removed when you leave them or close the post. Missing or
-  unsupported files show an error and are listed under the grid.
-- **Buttons:** like and save are stored only in your browser (`localStorage`); share copies/shares the link; comments are disabled because there is no backend.
-- **Direct links:** `?post=<id>` (plus `&page=N`, `&tab=videos`). Refresh keeps the post; with a direct link the grid is
-  not loaded until you close the post.
-- **Pagination:** `CONFIG.PAGE_SIZE = 50` in `script.js` (5 pages now). Changing page destroys the previous page's tiles and media.
-  `?page=3` opens page 3. The *Videos* tab lists posts that are a single video.
-- **Keys:** ←/→ carousel item, then previous/next post; PageUp/PageDown or K/J previous/next post; Esc closes.
-  (Over a focused video, use Shift+←/→ so the arrows can still seek.)
+1. Upload the image or video into the repository root (or its intended subdirectory).
+2. Add the exact filename as a new string in `MEDIA_FILES` in `posts.js`. Preserve punctuation and capitalization.
+3. Refresh the website. A new stable ID is derived from the filename, so unrelated additions do not renumber existing individual posts.
+4. For a numbered variant that should join an existing group, check the grouping heuristic or add an explicit group as described below.
+
+The dataset was generated from the uploaded 485-line filename list. If you add further files later, add those new filenames yourself to `MEDIA_FILES`; the browser cannot enumerate a GitHub directory automatically.
+
+## Add a video
+
+Upload an `.mp4` or `.webm` file and add its exact filename to `MEDIA_FILES`. The extension identifies it as a video. The viewer uses native HTML video controls and defers playback media until a post is opened. GitHub-hosted videos must be supported by the visitor's browser and available at the raw URL.
+
+## Configure carousel groupings
+
+In `posts.js`, edit `CAROUSEL_GROUPS`. Each array contains exact filenames that should be displayed as one post, for example:
+
+```js
+const CAROUSEL_GROUPS = [
+  ["igexport-example.jpg", "igexport-example-2.jpg", "igexport-example-3.mp4"]
+];
+```
+
+Explicit groups take priority over automatic grouping. Remove files from a group if you want them to be separate posts. The automatic rule groups a numbered file only when an unsuffixed sibling with the same base stem exists; it sorts numbered members numerically. Because filenames alone do not prove carousel relationships, inspect and adjust this configuration to match the source account.
+
+## Add captions or timestamps
+
+In `buildPosts()` inside `posts.js`, the resulting objects have `caption: ""` and `timestamp: ""`. For supplied information, add a metadata configuration keyed by stable post ID or edit the returned object to set those values. Do not infer captions or dates from filenames. The viewer hides dates when they are blank.
+
+## Pagination and direct links
+
+The profile displays at most **50 posts per page**. Page count is computed from the dataset. The `?page=2` parameter restores a page; `?post=post-id` opens an individual post and survives refresh. Post IDs are generated deterministically from a filename or group key. If you change the membership/key of an existing carousel, that group's ID may change; keep group membership stable to preserve its direct link.
+
+## Performance notes
+
+- Grid images are lazy-loaded with `loading=lazy` and an `IntersectionObserver`.
+- Only the current page's grid elements are rendered.
+- Original media is fetched only when a post opens; videos use native controls and are removed/reset when the viewer closes.
+- Opened media uses `object-fit: contain` and keeps its original aspect ratio. Only square grid thumbnails use cropping.
+- The browser controls its own cache and memory reclamation; the site does not claim to forcibly clear either.
 
 ## Deploy to GitHub Pages
-Put all files in a repository (e.g. root of `InfiniteProfile/hennaah.11`, or a separate repo), then
-**Settings → Pages → Deploy from a branch → main / (root)**. Keep the site's `index.html` and the media in one
-repo if you like; media always loads from `MEDIA_BASE` regardless.
 
-## Known limits
-Not tested against the live repository from this environment, and no browser rendering was run here; the data/URL generation and page logic
-were checked automatically. Please open the site once and check that portrait, landscape and video posts look right.
+1. Upload `index.html`, `style.css`, `script.js`, and `posts.js` to the root of `InfiniteProfile/hennaah.11` (add `README.md` too if desired).
+2. Confirm the media files are committed to the repository's `main` branch at the paths represented by the filenames.
+3. Open repository **Settings → Pages**.
+4. Choose **Deploy from a branch**, select `main` and `/ (root)`, then save.
+5. Open the Pages URL after deployment. A public raw-media repository is required for visitors to load the files.
+
+## Validation summary
+
+- Profile name: `Hena`; username: `hennaah.11`.
+- Profile image path: `profile photo/igexport-DVY7NlejDJ9-6.jpg`.
+- Source coverage: all **485/485** nonblank filenames retained; no exact duplicates found.
+- Type detection: JPG and MP4 supported for all source entries.
+- No captions, timestamps, follower counts, or following counts are fabricated.

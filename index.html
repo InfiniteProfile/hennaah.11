@@ -1,96 +1,43 @@
 <!doctype html>
-<html lang="en" data-theme="light">
+<html lang="en">
 <head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>Hena (@hennaah.11)</title>
-<meta name="description" content="Hena (@hennaah.11) – an independent, Instagram-style viewer for photos and videos.">
-<meta name="color-scheme" content="light dark">
-<script>try{var t=localStorage.getItem('hena-theme');if(t)document.documentElement.dataset.theme=t}catch(e){}</script>
-<link rel="stylesheet" href="style.css">
-<script src="posts.js" defer></script>
-<script src="overrides.js" defer></script>
-<script src="script.js" defer></script>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <meta name="theme-color" content="#ffffff">
+  <meta name="description" content="Hena — photo and video profile.">
+  <title>Hena (@hennaah.11)</title>
+  <link rel="stylesheet" href="style.css">
+  <script src="posts.js" defer></script>
+  <script src="script.js" defer></script>
 </head>
 <body>
-<svg width="0" height="0" style="position:absolute" aria-hidden="true">
-  <defs>
-    <symbol id="i-grid" viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/></symbol>
-    <symbol id="i-reel" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="4"/><path d="M3 9h18M9 3l3 6M15 3l3 6"/><path d="M10.5 12.5v5l4.5-2.5z"/></symbol>
-    <symbol id="i-carousel" viewBox="0 0 24 24"><rect x="8" y="3" width="13" height="13" rx="2.5"/><path d="M5 7.5V17a3 3 0 0 0 3 3h9.5"/></symbol>
-    <symbol id="i-heart" viewBox="0 0 24 24"><path d="M12 20.5s-8-4.9-8-11A4.5 4.5 0 0 1 12 6.6 4.5 4.5 0 0 1 20 9.5c0 6.1-8 11-8 11z"/></symbol>
-    <symbol id="i-comment" viewBox="0 0 24 24"><path d="M21 11.5a8.5 8.5 0 0 1-12.6 7.4L3 20.5l1.7-5A8.5 8.5 0 1 1 21 11.5z"/></symbol>
-    <symbol id="i-share" viewBox="0 0 24 24"><path d="M21 3 10 14M21 3l-7 18-4-7-7-4z"/></symbol>
-    <symbol id="i-bookmark" viewBox="0 0 24 24"><path d="M6 3h12v18l-6-4.5L6 21z"/></symbol>
-    <symbol id="i-close" viewBox="0 0 24 24"><path d="M5 5l14 14M19 5L5 19"/></symbol>
-    <symbol id="i-left" viewBox="0 0 24 24"><path d="M15 5l-7 7 7 7"/></symbol>
-    <symbol id="i-right" viewBox="0 0 24 24"><path d="M9 5l7 7-7 7"/></symbol>
-    <symbol id="i-expand" viewBox="0 0 24 24"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></symbol>
-    <symbol id="i-moon" viewBox="0 0 24 24"><path d="M20 14.5A8.5 8.5 0 0 1 9.5 4 8.5 8.5 0 1 0 20 14.5z"/></symbol>
-  </defs>
-</svg>
-
-<div id="app">
-  <header class="topbar">
-    <span class="topbar-name">hennaah.11</span>
-    <button class="icon-btn" id="theme-btn" type="button" aria-label="Toggle dark mode" title="Toggle dark mode"><svg class="ico"><use href="#i-moon"/></svg></button>
-  </header>
-
-  <main id="main">
-    <section class="profile" aria-label="Profile">
-      <div class="avatar-wrap"><img id="avatar" class="avatar" alt="Hena (@hennaah.11)" width="150" height="150" decoding="async"></div>
-      <div class="meta">
-        <h1 class="username">hennaah.11</h1>
-        <ul class="stats" id="stats"></ul>
-        <p class="display-name">Hena</p>
-        <p class="bio" id="bio" hidden></p>
+  <header class="topbar"><a class="wordmark" href="./" aria-label="Hena profile">Instagram</a><div class="top-actions"><button id="themeToggle" class="icon-button" aria-label="Toggle dark mode" title="Toggle dark mode">◐</button></div></header>
+  <main class="page-shell">
+    <section class="profile-header" aria-label="Profile header">
+      <div class="avatar-wrap"><img id="profilePhoto" class="profile-avatar" alt="Hena profile photo"></div>
+      <div class="profile-details"><div class="profile-title"><h1>hennaah.11</h1><button class="follow-button" type="button" id="followButton">Follow</button><button class="icon-button" type="button" aria-label="More options">•••</button></div>
+        <div class="stats"><span><strong id="postCount">0</strong> posts</span></div>
+        <div class="display-name" id="displayName">Hena</div>
       </div>
     </section>
-
-    <nav class="tabs" id="tabs" aria-label="Profile sections">
-      <a href="?" data-tab="all" class="tab" aria-current="page"><svg class="ico"><use href="#i-grid"/></svg><span>Posts</span></a>
-      <a href="?tab=videos" data-tab="videos" class="tab"><svg class="ico"><use href="#i-reel"/></svg><span>Videos</span></a>
-    </nav>
-
-    <div id="grid" class="grid" aria-live="polite"></div>
-    <p id="empty" class="empty" hidden>No posts to show.</p>
-    <nav id="pager" class="pager" aria-label="Pagination"></nav>
-
-    <footer class="foot">
-      <details id="missing" hidden><summary id="missing-sum"></summary><ul id="missing-list"></ul></details>
-      <p>Independent website displaying the owner's own exported media. Not affiliated with or connected to Instagram.</p>
-    </footer>
+    <nav class="tabs" aria-label="Profile content"><button class="tab active" aria-label="Posts" title="Posts">▦ <span>POSTS</span></button><button class="tab" aria-label="Reels" title="Reels">▻ <span>REELS</span></button><button class="tab" aria-label="Tagged" title="Tagged">♙ <span>TAGGED</span></button></nav>
+    <section id="grid" class="post-grid" aria-label="Posts"></section>
+    <nav id="pagination" class="pagination" aria-label="Post pages"></nav>
+    <p id="status" class="status" role="status" aria-live="polite"></p>
   </main>
-</div>
-
-<div id="viewer" class="viewer" hidden role="dialog" aria-modal="true" aria-label="Post">
-  <div class="viewer-backdrop" data-close></div>
-  <button class="vbtn vclose" type="button" data-close aria-label="Close post"><svg class="ico"><use href="#i-close"/></svg></button>
-  <button class="vbtn vpost vprev" id="post-prev" type="button" aria-label="Previous post"><svg class="ico"><use href="#i-left"/></svg></button>
-  <button class="vbtn vpost vnext" id="post-next" type="button" aria-label="Next post"><svg class="ico"><use href="#i-right"/></svg></button>
-
-  <article class="vcard">
-    <div class="vmedia" id="vmedia">
-      <div class="stage" id="stage"></div>
-      <button class="mbtn mprev" id="slide-prev" type="button" aria-label="Previous item" hidden><svg class="ico"><use href="#i-left"/></svg></button>
-      <button class="mbtn mnext" id="slide-next" type="button" aria-label="Next item" hidden><svg class="ico"><use href="#i-right"/></svg></button>
-      <span class="counter" id="counter" hidden></span>
-      <button class="mbtn mfull" id="fs-btn" type="button" aria-label="Full screen" title="Full screen"><svg class="ico"><use href="#i-expand"/></svg></button>
-      <div class="dots" id="dots" hidden></div>
-    </div>
-    <div class="vside">
-      <header class="vhead"><img class="vavatar" id="vavatar" alt="" width="32" height="32"><strong>hennaah.11</strong></header>
-      <div class="vcaption" id="vcaption" hidden></div>
-      <div class="vactions">
-        <button class="icon-btn" id="like-btn" type="button" aria-pressed="false" aria-label="Like" title="Like (kept on this device only)"><svg class="ico"><use href="#i-heart"/></svg></button>
-        <button class="icon-btn" type="button" disabled aria-label="Comments unavailable" title="Comments are not available on this site"><svg class="ico"><use href="#i-comment"/></svg></button>
-        <button class="icon-btn" id="share-btn" type="button" aria-label="Share" title="Share link to this post"><svg class="ico"><use href="#i-share"/></svg></button>
-        <button class="icon-btn save" id="save-btn" type="button" aria-pressed="false" aria-label="Save" title="Save (kept on this device only)"><svg class="ico"><use href="#i-bookmark"/></svg></button>
-      </div>
-      <time class="vtime" id="vtime" hidden></time>
-    </div>
-  </article>
-</div>
-<div id="toast" class="toast" role="status" aria-live="polite"></div>
+  <div id="viewer" class="viewer" hidden role="dialog" aria-modal="true" aria-label="Post viewer">
+    <button id="closeViewer" class="viewer-close" aria-label="Close post">×</button>
+    <button id="previousPost" class="post-step prev" aria-label="Previous post">‹</button>
+    <article class="post-dialog">
+      <div id="viewerMedia" class="viewer-media"></div>
+      <aside class="post-sidebar"><header class="post-author"><img id="viewerAvatar" alt="" class="mini-avatar"><div><strong>hennaah.11</strong><small id="viewerDate"></small></div><button class="icon-button more-button" aria-label="More options">•••</button></header>
+        <div id="viewerCaption" class="caption-area"></div>
+        <div class="post-actions"><button id="likeButton" class="action-button" aria-label="Like post" title="Like">♡</button><button class="action-button" aria-label="Comment" title="Comment">▢</button><button id="shareButton" class="action-button" aria-label="Copy post link" title="Copy post link">➤</button><button id="saveButton" class="action-button save-action" aria-label="Save post" title="Save">♧</button></div>
+        <div id="carouselControls" class="carousel-controls" hidden><button id="carouselPrev" aria-label="Previous media">‹</button><span id="carouselPosition">1/1</span><button id="carouselNext" aria-label="Next media">›</button></div>
+        <div class="sidebar-footer"><span id="linkStatus"></span><span>Media from repository</span></div>
+      </aside>
+    </article>
+    <button id="nextPost" class="post-step next" aria-label="Next post">›</button>
+  </div>
 </body>
 </html>
