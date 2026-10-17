@@ -363,7 +363,7 @@
     }
   }
   async function fullChain(post, session) {
-    if (!ALLOW_FULL || session.chaining) return;
+    if (session.chaining) return;
     session.chaining = true;
     try {
       for (;;) {
@@ -372,6 +372,15 @@
         const next = FULL_ALL ? byDistance(post.files, activeMediaIndex).find(f => !photoState(f).loaded.full && !photoState(f).failed.full)
                               : (!photoState(cur).loaded.full && !photoState(cur).failed.full ? cur : null);
         if (!next) return;
+        if (SLOW_NET) {
+          // Data saver / 2G: don't spend data right away. If the person stays on the same photo for a
+          // few seconds, they are really looking at it, so the original size is loaded then.
+          let seen;
+          do { seen = activeMediaIndex; await new Promise(r => setTimeout(r, 4000)); if (!sessionLive(session)) return; }
+          while (seen !== activeMediaIndex);
+          if (post.files[activeMediaIndex] !== next) continue;   // moved to another photo meanwhile: re-pick
+          if (photoState(next).loaded.full) continue;
+        }
         await loadTier(next, "full", next === cur ? "high" : "low");
       }
     } finally { session.chaining = false; }
