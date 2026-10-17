@@ -94,3 +94,15 @@ html,body{margin:0;min-height:100%;background:var(--bg);color:var(--text);font-f
   .viewer-close{top:calc(8px + env(safe-area-inset-top));right:10px;z-index:6}
   .video-stage video{background:#000}
 }
+
+/* ---- Priority loader visuals ---- */
+.grid-item{contain:layout paint}
+.grid-item img.grid-media{opacity:0;transition:opacity .28s ease}
+.grid-item img.grid-media.img-ready{opacity:1}
+.grid-item:not(.media-unavailable){background:linear-gradient(110deg,var(--tile) 30%,rgba(128,128,128,.18) 50%,var(--tile) 70%);background-size:220% 100%;animation:tileShimmer 1.3s linear infinite}
+@keyframes tileShimmer{to{background-position:-120% 0}}
+.grid-item video.grid-media.previewing{background:#000}
+/* low-resolution photo shows blurred, then sharpens when the better version arrives */
+.viewer-media .opened-image{transition:filter .35s ease,transform .35s ease}
+.viewer-media .opened-image.lowres{filter:blur(9px);transform:scale(1.03)}
+@media (prefers-reduced-motion:reduce){.grid-item .grid-media,.viewer-media .opened-image{transition:none!important;animation:none!important}}

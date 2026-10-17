@@ -2,9 +2,12 @@
   "use strict";
   const $ = id => document.getElementById(id);
   const grid = $("grid"), viewer = $("viewer"), viewerMedia = $("viewerMedia");
-  const profilePhotoUrl = mediaUrl(PROFILE_PHOTO_PATH);
-  $("profilePhoto").src = profilePhotoUrl;
-  $("viewerAvatar").src = profilePhotoUrl;
+  function setAvatar(img) {
+    const urls = [imageVariant(PROFILE_PHOTO_PATH, 240, 75), ...mediaUrls(PROFILE_PHOTO_PATH)]; let i = 0;
+    img.onerror = () => { if (++i < urls.length) img.src = urls[i]; };
+    img.src = urls[0];
+  }
+  setAvatar($("profilePhoto")); setAvatar($("viewerAvatar"));
 
   const photos = posts.filter(post => post.type === "image");
   const videos = posts.filter(post => post.type === "video");
@@ -17,7 +20,6 @@
   applyTheme(savedTheme || (prefersDark ? "dark" : "light"));
 
   $("postCount").textContent = posts.length.toLocaleString();
-  $("videoCount").textContent = videos.length.toLocaleString();
 
   function applyTheme(theme) {
     document.body.classList.toggle("dark", theme === "dark");
@@ -50,7 +52,7 @@
     media.className = "grid-media";
     media.dataset.src = mediaUrl(file);
     if (isVideo(file)) media._urls = mediaUrls(file);
-    if (media.tagName === "IMG") { media.alt = ""; media.loading = "lazy"; media.decoding = "async"; media.fetchPriority = "low"; }
+    if (media.tagName === "IMG") { media.alt = ""; media.decoding = "async"; media._file = file; }
     else {
       media.muted = true; media.defaultMuted = true; media.playsInline = true;
       media.preload = "none"; media.setAttribute("aria-label", "Video thumbnail");
@@ -71,59 +73,118 @@
       button.addEventListener("pointerenter", e => { if (e.pointerType === "mouse") warmPost(post); }, { once: true });
     }
     button.addEventListener("click", () => {
-      // Promote the exact tile the viewer clicked, then prioritize its full-size original.
-      const tileMedia = button.querySelector(".grid-media");
-      if (tileMedia?.tagName === "IMG" && tileMedia.dataset.src) loadThumbnail(tileMedia, true);
       openPost(post.id, true);
     });
     return button;
   }
 
-  function loadThumbnail(el, prioritize = false) {
-    if (!el.isConnected || !el.dataset.src) return;
-    if (el.tagName === "VIDEO") { requestVideoTile(el); return; }
-    el.fetchPriority = prioritize ? "high" : (el.fetchPriority || "low");
-    el.loading = prioritize ? "eager" : "lazy";
-    const src = el.dataset.src; delete el.dataset.src;
-    el.src = src;
-    el.addEventListener("error", () => { if (el.isConnected) { el.closest(".grid-item")?.classList.add("media-unavailable"); el.removeAttribute("src"); } }, { once: true });
-  }
+  function loadThumbnail(el) { requestTile(el); }
 
-  // ---- Video tile engine ----------------------------------------------------
-  // Only tiles that are on (or just next to) the screen load a video frame, nearest-to-centre
-  // first, 3 at a time. Once a frame is captured it is kept as a tiny poster image and the video
-  // connection is released. Tiles that scroll away are cancelled, so nothing piles up.
-  const tileQueue = []; const loadingTiles = new Set(); let tilePaused = false;
-  const TILE_MAX = 4, HEAD_BYTES = 700 * 1024;   // a thumbnail never downloads more than ~700 KB
-  const posterCache = new Map();           // post id -> dataURL of first frame
+  // ===========================================================================
+  //  PRIORITY LOADER
+  //  Rule: whatever the person is looking at loads first. Everything else waits, and anything that
+  //  scrolls out of view (or is overtaken by something closer to the middle of the screen) is
+  //  cancelled, then loaded again later if it comes back. Bad network / weak phone = lighter work.
+  // ===========================================================================
+  const conn = navigator.connection || {};
+  const SLOW_NET = !!(conn.saveData || /(^|-)2g$/.test(conn.effectiveType || ""));
+  const LOW_END = !!((navigator.deviceMemory && navigator.deviceMemory <= 2) || (navigator.hardwareConcurrency && navigator.hardwareConcurrency <= 2));
+  const THUMBW = 320, MIDW = (SLOW_NET || LOW_END) ? 560 : 720;
+  const ALLOW_FULL = !SLOW_NET, FULL_ALL = !SLOW_NET && !LOW_END;
+  const PREVIEW_OK = !SLOW_NET && !LOW_END && !(window.matchMedia && matchMedia("(prefers-reduced-motion: reduce)").matches);
+  const HEAD_BYTES = 700 * 1024;             // a video thumbnail never downloads more than ~700 KB
+
+  let tilePaused = false;
+  const posterCache = new Map();             // post id -> dataURL (first frame of a reel)
+  const headCache = new Map();               // post id -> Blob (first ~700 KB of a reel, used for previews)
   const tileId = el => el.closest(".grid-item")?.dataset.id;
+  const centreDist = el => { const r = el.getBoundingClientRect(); return Math.abs(r.top + r.height / 2 - window.innerHeight / 2); };
+  function rememberHead(id, blob) { headCache.delete(id); headCache.set(id, blob); if (headCache.size > 14) headCache.delete(headCache.keys().next().value); }
 
-  function requestVideoTile(el) {
+  function makePool(max, start) {
+    const pool = { queue: [], loading: new Set(), max, start };
+    pool.pump = () => {
+      if (tilePaused) return;
+      while (pool.queue.length) {
+        let bi = -1, bd = Infinity;
+        pool.queue.forEach((el, i) => { if (!el.isConnected) return; const d = centreDist(el); if (d < bd) { bd = d; bi = i; } });
+        if (bi < 0) { pool.queue.forEach(el => { el._state = null; }); pool.queue.length = 0; break; }
+        if (pool.loading.size >= pool.max) {
+          // Full: if the best waiting tile is clearly closer to the middle than the farthest one in flight, swap them.
+          let worst = null, wd = -1; pool.loading.forEach(el => { const d = centreDist(el); if (d > wd) { wd = d; worst = el; } });
+          if (worst && bd + 160 < wd) { abortTile(worst); worst._state = "queued"; pool.queue.push(worst); } else break;
+        }
+        pool.start(pool.queue.splice(bi, 1)[0]);
+      }
+    };
+    return pool;
+  }
+  const imgPool = makePool(SLOW_NET || LOW_END ? 4 : 8, el => startImageTile(el));
+  const videoPool = makePool(SLOW_NET || LOW_END ? 2 : 3, el => startVideoTile(el));
+  const poolFor = el => el.tagName === "VIDEO" ? videoPool : imgPool;
+
+  function abortTile(el) {
+    const pool = poolFor(el); pool.loading.delete(el); el._tok = (el._tok || 0) + 1;
+    clearTimeout(el._timer); clearTimeout(el._seek);
+    if (el.tagName === "VIDEO") { cleanupTileSource(el); try { el.pause(); } catch (_) {} el.removeAttribute("src"); try { el.load(); } catch (_) {} }
+    else { el.onload = el.onerror = null; el.removeAttribute("src"); }
+  }
+  function requestTile(el) {
     if (el._state) return;
     const id = tileId(el);
-    if (id && posterCache.has(id)) { el.poster = posterCache.get(id); el.classList.add("video-frame-ready"); el._state = "poster"; return; }
-    el._state = "queued"; tileQueue.push(el); pumpTiles();
+    if (el.tagName === "VIDEO" && id && posterCache.has(id)) { el.poster = posterCache.get(id); el.classList.add("video-frame-ready"); el._state = "poster"; return; }
+    el._state = "queued"; const pool = poolFor(el); pool.queue.push(el); pool.pump();
   }
-  function releaseVideoTile(el) {
-    const qi = tileQueue.indexOf(el); if (qi >= 0) tileQueue.splice(qi, 1);
-    const st = el._state; loadingTiles.delete(el); el._tok = (el._tok || 0) + 1; cleanupTileSource(el);
-    if (st === "loading" || st === "ready") {
-      try { el.pause(); } catch (_) {}
-      el.removeAttribute("src"); try { el.load(); } catch (_) {}
-    }
-    if (el.poster) el._state = "poster"; else { el._state = null; el.classList.remove("video-frame-ready"); }
-    if (st === "loading") pumpTiles();
+  function releaseTile(el) {
+    const pool = poolFor(el), qi = pool.queue.indexOf(el); if (qi >= 0) pool.queue.splice(qi, 1);
+    if (el._previewing) stopPreview(el);
+    const st = el._state;
+    if (st === "loading") abortTile(el);
+    else if (st === "ready" && el.tagName === "VIDEO") { el._tok = (el._tok || 0) + 1; try { el.pause(); } catch (_) {} el.removeAttribute("src"); try { el.load(); } catch (_) {} cleanupTileSource(el); }
+    if (el.tagName === "VIDEO") { if (el.poster) el._state = "poster"; else { el._state = null; el.classList.remove("video-frame-ready"); } }
+    else el._state = st === "done" ? "done" : null;
+    if (st === "loading") pool.pump();
   }
-  function pumpTiles() {
-    while (!tilePaused && loadingTiles.size < TILE_MAX && tileQueue.length) {
-      const mid = window.innerHeight / 2; let best = 0, bestD = Infinity;
-      tileQueue.forEach((el, i) => {
-        const r = el.getBoundingClientRect(), d = Math.abs(r.top + r.height / 2 - mid);
-        if (d < bestD) { bestD = d; best = i; }
-      });
-      const el = tileQueue.splice(best, 1)[0];
-      if (el.isConnected && el._state === "queued") startVideoTile(el); else el._state = null;
+
+  // ---- image tiles: small 320px WebP from an image CDN, original as fallback ----
+  function startImageTile(el) {
+    const file = el._file; if (!file) { el._state = null; return; }
+    const urls = [imageVariant(file, THUMBW, 62), ...mediaUrls(file)]; let i = 0;
+    const token = el._tok = (el._tok || 0) + 1;
+    el._state = "loading"; imgPool.loading.add(el);
+    const done = ok => {
+      if (el._tok !== token) return;
+      imgPool.loading.delete(el);
+      if (ok) { el._state = "done"; el.classList.add("img-ready"); const st = photoState(file); st.loaded.thumb = true; st.url.thumb = el.currentSrc || el.src; }
+      else { el._state = null; el.closest(".grid-item")?.classList.add("media-unavailable"); }
+      imgPool.pump();
+    };
+    el.onload = () => done(true);
+    el.onerror = () => { if (el._tok !== token) return; if (++i < urls.length) el.src = urls[i]; else done(false); };
+    el.src = urls[0];
+  }
+
+  // ---- video tiles: only the first ~700 KB, turned into a poster image ----
+  function cleanupTileSource(el) {
+    if (el._abort) { try { el._abort.abort(); } catch (_) {} el._abort = null; }
+    if (el._blobUrl) { try { URL.revokeObjectURL(el._blobUrl); } catch (_) {} el._blobUrl = null; }
+  }
+  async function fetchHead(url, bytes, signal) {
+    const res = await fetch(url, { headers: { Range: `bytes=0-${bytes - 1}` }, signal });
+    if (!res.ok) throw new Error("HTTP " + res.status);
+    const reader = res.body.getReader(), chunks = []; let got = 0;
+    while (got < bytes) { const { done, value } = await reader.read(); if (done) break; chunks.push(value); got += value.length; }
+    try { await reader.cancel(); } catch (_) {}
+    return new Blob(chunks, { type: "video/mp4" });
+  }
+  async function headBlob(el, signal) {
+    const id = tileId(el), urls = el._urls || [el.dataset.src]; let blob = null;
+    for (const u of urls) {
+      try { blob = await fetchHead(u, HEAD_BYTES, signal); break; }
+      catch (e) { if (signal && signal.aborted) throw e; }
     }
+    if (blob && blob.size && id) rememberHead(id, blob);
+    return blob;
   }
   function capturePoster(el) {
     const id = tileId(el);
@@ -136,89 +197,229 @@
       posterCache.set(id, url); el.poster = url;
     } catch (_) {}
   }
-  function cleanupTileSource(el) {
-    if (el._abort) { try { el._abort.abort(); } catch (_) {} el._abort = null; }
-    if (el._blobUrl) { try { URL.revokeObjectURL(el._blobUrl); } catch (_) {} el._blobUrl = null; }
-  }
-  // Download ONLY the first HEAD_BYTES of a video (enough for the first frame when the file has its
-  // index at the start, as Instagram exports do). Works even if the server ignores Range: we stop
-  // reading and abort the request ourselves, so the rest of the file is never downloaded.
-  async function fetchHead(url, bytes, signal) {
-    const res = await fetch(url, { headers: { Range: `bytes=0-${bytes - 1}` }, signal });
-    if (!res.ok) throw new Error("HTTP " + res.status);
-    const reader = res.body.getReader(), chunks = []; let got = 0;
-    while (got < bytes) { const { done, value } = await reader.read(); if (done) break; chunks.push(value); got += value.length; }
-    try { await reader.cancel(); } catch (_) {}
-    return new Blob(chunks, { type: "video/mp4" });
-  }
   function startVideoTile(el) {
     const urls = el._urls || [el.dataset.src]; if (!urls[0]) { el._state = null; return; }
     const token = el._tok = (el._tok || 0) + 1;
-    let done = false, mode = "head", seekTimer = 0;
-    el._state = "loading"; loadingTiles.add(el);
+    let done = false, mode = "head";
+    el._state = "loading"; videoPool.loading.add(el);
     const stale = () => done || el._tok !== token;
     const finish = ok => {
       if (stale()) return;
-      done = true; clearTimeout(timer); clearTimeout(seekTimer); loadingTiles.delete(el);
+      done = true; clearTimeout(el._timer); clearTimeout(el._seek); videoPool.loading.delete(el);
       if (ok) {
         el.classList.add("video-frame-ready"); capturePoster(el);
         if (el.poster) { el._state = "poster"; try { el.pause(); } catch (_) {} el.removeAttribute("src"); try { el.load(); } catch (_) {} cleanupTileSource(el); }
         else el._state = "ready";
       } else {
         cleanupTileSource(el); el._state = null; el.removeAttribute("src"); try { el.load(); } catch (_) {}
-        if (!el._retried) { el._retried = true; setTimeout(() => { if (el.isConnected && !el._state && !tilePaused) requestVideoTile(el); }, 2500); }
+        if (!el._retried) { el._retried = true; setTimeout(() => { if (el.isConnected && !el._state && !tilePaused) requestTile(el); }, 2500); }
         else if (el.isConnected) el.closest(".grid-item")?.classList.add("media-unavailable");
       }
-      pumpTiles();
+      videoPool.pump();
     };
-    const timer = setTimeout(() => finish(el.readyState >= 2), 12000);
+    el._timer = setTimeout(() => finish(el.readyState >= 2), 12000);
     el.preload = "metadata"; el.removeAttribute("crossorigin");
     el.addEventListener("loadeddata", () => {
       if (stale()) return;
-      if (el.currentTime === 0 && el.duration > 0.3) { try { el.currentTime = 0.1; seekTimer = setTimeout(() => finish(true), 1200); return; } catch (_) {} }
+      if (el.currentTime === 0 && el.duration > 0.3) { try { el.currentTime = 0.1; el._seek = setTimeout(() => finish(true), 1200); return; } catch (_) {} }
       finish(true);
     }, { once: true });
     el.addEventListener("seeked", () => finish(true), { once: true });
     el.addEventListener("error", () => {
       if (stale()) return;
       cleanupTileSource(el);
-      if (mode === "head") {                 // partial file unusable (index at the end?) -> normal loading
-        mode = "direct"; el.crossOrigin = "anonymous"; el.src = urls[0] + "#t=0.1"; try { el.load(); } catch (_) {}
-      } else if (mode === "direct") {
-        mode = "plain"; el.removeAttribute("crossorigin"); el.src = (urls[1] || urls[0]) + "#t=0.1"; try { el.load(); } catch (_) {}
-      } else finish(false);
+      if (mode === "head") { mode = "direct"; el.crossOrigin = "anonymous"; el.src = urls[0] + "#t=0.1"; try { el.load(); } catch (_) {} }
+      else if (mode === "direct") { mode = "plain"; el.removeAttribute("crossorigin"); el.src = (urls[1] || urls[0]) + "#t=0.1"; try { el.load(); } catch (_) {} }
+      else finish(false);
     });
     const ctrl = new AbortController(); el._abort = ctrl;
     (async () => {
       let blob = null;
-      for (const url of urls) {
-        try { blob = await fetchHead(url, HEAD_BYTES, ctrl.signal); break; }
-        catch (_) { if (ctrl.signal.aborted) return; }
-      }
+      try { blob = await headBlob(el, ctrl.signal); } catch (_) { return; }   // aborted
       if (stale()) return;
       if (!blob || !blob.size) { el.dispatchEvent(new Event("error")); return; }
       el._blobUrl = URL.createObjectURL(blob);
       el.src = el._blobUrl; try { el.load(); } catch (_) {}
     })();
   }
+
+  // ---- live previews: the reel(s) in the middle of the screen play a muted clip, no tap needed ----
+  const previews = new Set(); const PREVIEW_MAX = 2; let previewTimer = 0;
+  function stopPreview(el) {
+    previews.delete(el);
+    if (!el._previewing) return;
+    el._previewing = false; el.onended = el.onwaiting = null; clearTimeout(el._w);
+    try { el.pause(); } catch (_) {}
+    el.removeAttribute("src"); try { el.load(); } catch (_) {}
+    if (el._prevUrl) { try { URL.revokeObjectURL(el._prevUrl); } catch (_) {} el._prevUrl = null; }
+    el.classList.remove("previewing");
+  }
+  function stopAllPreviews() { [...previews].forEach(stopPreview); }
+  function updatePreviews() {
+    clearTimeout(previewTimer);
+    for (const el of [...previews]) { const r = el.getBoundingClientRect(); if (r.bottom < 0 || r.top > window.innerHeight) stopPreview(el); }
+    if (!PREVIEW_OK || tilePaused) return;
+    previewTimer = setTimeout(choosePreviews, 450);       // wait until scrolling settles
+  }
+  function choosePreviews() {
+    if (!PREVIEW_OK || tilePaused || document.hidden || previews.size >= PREVIEW_MAX) return;
+    const cands = [...grid.querySelectorAll("video.grid-media")].filter(el => {
+      if (el._state !== "poster" || el._previewing) return false;
+      const r = el.getBoundingClientRect(); return r.height > 0 && r.top >= 0 && r.bottom <= window.innerHeight;
+    }).sort((a, b) => centreDist(a) - centreDist(b));
+    cands.slice(0, PREVIEW_MAX - previews.size).forEach(startPreview);
+  }
+  async function startPreview(el) {
+    const id = tileId(el); if (!id) return;
+    el._previewing = true; previews.add(el);
+    let blob = headCache.get(id);
+    if (!blob) { try { blob = await headBlob(el); } catch (_) {} }
+    if (!el._previewing || !el.isConnected || tilePaused || !blob) { stopPreview(el); return; }
+    el._prevUrl = URL.createObjectURL(blob); el.muted = true; el.playsInline = true;
+    const restart = () => { try { el.currentTime = 0; const p = el.play(); if (p && p.catch) p.catch(() => {}); } catch (_) {} };
+    el.onended = restart;                                   // the clip is a short head of the file: loop it
+    el.onwaiting = () => { clearTimeout(el._w); el._w = setTimeout(() => { if (el._previewing) restart(); }, 350); };
+    el.src = el._prevUrl; el.classList.add("previewing");
+    const p = el.play(); if (p && p.catch) p.catch(() => stopPreview(el));
+  }
+
   function pauseTileLoading() {
-    tilePaused = true;
-    for (const el of [...loadingTiles]) releaseVideoTile(el);   // free the connection for the reel being opened
+    tilePaused = true; clearTimeout(previewTimer); stopAllPreviews();
+    for (const pool of [imgPool, videoPool]) for (const el of [...pool.loading]) { abortTile(el); el._state = null; }   // the post being opened gets the whole connection
   }
   function resumeTileLoading() {
     tilePaused = false;
-    grid.querySelectorAll("video.grid-media").forEach(el => {
+    grid.querySelectorAll(".grid-media").forEach(el => {
       if (el._state) return;
       const r = el.getBoundingClientRect();
-      if (r.bottom > -250 && r.top < window.innerHeight + 250) requestVideoTile(el);
+      if (r.bottom > -150 && r.top < window.innerHeight + 150) requestTile(el);
     });
-    pumpTiles();
+    imgPool.pump(); videoPool.pump(); updatePreviews();
+  }
+
+  // ===========================================================================
+  //  PHOTO PIPELINE (inside an opened post)
+  //  tiers: thumb (320px, ~10 KB) -> mid (720px) -> full (original). The WHOLE post gets its thumb and
+  //  mid tiers at once, so swiping through a carousel is instant and never shows an empty screen.
+  //  Switching photos cancels loads for the one you left and puts the new one first.
+  // ===========================================================================
+  const photoCache = new Map(), pendingLoads = new Map();
+  let photoSession = null, viewerImg = null;
+  function photoState(file) {
+    let st = photoCache.get(file);
+    if (!st) { st = { loaded: {}, url: {}, p: {}, imgs: {}, failed: {} }; photoCache.set(file, st); }
+    return st;
+  }
+  function tierUrls(file, tier) {
+    const orig = mediaUrls(file);
+    if (tier === "thumb") return [imageVariant(file, THUMBW, 62), ...orig];
+    if (tier === "mid") return [imageVariant(file, MIDW, 72), ...orig];
+    return orig;
+  }
+  function loadTier(file, tier, prio = "auto") {
+    const st = photoState(file);
+    if (st.loaded[tier]) return Promise.resolve(true);
+    if (st.p[tier]) return st.p[tier];
+    const urls = tierUrls(file, tier), key = file + "|" + tier; let i = 0;
+    const im = new Image(); im.decoding = "async"; try { im.fetchPriority = prio; } catch (_) {}
+    const p = new Promise(resolve => {
+      pendingLoads.set(key, { file, tier, im, st, resolve });
+      const fin = ok => {
+        pendingLoads.delete(key); st.p[tier] = null;
+        if (ok) { st.loaded[tier] = true; st.url[tier] = im.currentSrc || im.src; st.imgs[tier] = im; } else st.failed[tier] = true;
+        resolve(ok); if (ok) applyBest();
+      };
+      im.onload = () => fin(true);
+      im.onerror = () => { if (++i < urls.length) im.src = urls[i]; else fin(false); };
+      im.src = urls[0];
+    });
+    st.p[tier] = p; return p;
+  }
+  function cancelPhotoLoads(keep) {
+    for (const [key, rec] of [...pendingLoads]) {
+      if (keep(rec.file, rec.tier)) continue;
+      rec.im.onload = rec.im.onerror = null; rec.im.removeAttribute("src");
+      rec.st.p[rec.tier] = null; pendingLoads.delete(key); rec.resolve(false);
+    }
+  }
+  const sessionLive = s => photoSession === s && opened;
+  const byDistance = (files, idx) => files.map((f, i) => [f, i]).sort((a, b) => Math.abs(a[1] - idx) - Math.abs(b[1] - idx) || a[1] - b[1]).map(x => x[0]);
+
+  function applyBest() {
+    const v = viewerImg;
+    if (!v || !opened || activeId !== v.postId || activeMediaIndex !== v.index) return;
+    const st = photoState(v.file);
+    const rank = st.loaded.full ? 3 : st.loaded.mid ? 2 : st.loaded.thumb ? 1 : 0;
+    if (rank <= v.rank) return;
+    const tier = rank === 3 ? "full" : rank === 2 ? "mid" : "thumb";
+    v.rank = rank; v.el.classList.toggle("lowres", rank === 1); v.el.src = st.url[tier];
+    if (!v.el.isConnected) {
+      const post = byId.get(v.postId);
+      const attach = () => {
+        if (viewerImg !== v || !opened || activeId !== v.postId || activeMediaIndex !== v.index || v.el.isConnected) return;
+        viewerMedia.replaceChildren(v.el); addCarouselControls(post, v.index);
+      };
+      (v.el.decode ? v.el.decode() : Promise.reject()).then(attach, attach);
+    }
+  }
+  async function fullChain(post, session) {
+    if (!ALLOW_FULL || session.chaining) return;
+    session.chaining = true;
+    try {
+      for (;;) {
+        if (!sessionLive(session)) return;
+        const cur = post.files[activeMediaIndex];
+        const next = FULL_ALL ? byDistance(post.files, activeMediaIndex).find(f => !photoState(f).loaded.full && !photoState(f).failed.full)
+                              : (!photoState(cur).loaded.full && !photoState(cur).failed.full ? cur : null);
+        if (!next) return;
+        await loadTier(next, "full", next === cur ? "high" : "low");
+      }
+    } finally { session.chaining = false; }
+  }
+  async function orchestratePost(post, idx, session) {
+    const files = byDistance(post.files, idx), cur = files[0], rest = files.slice(1);
+    const thumbs = [loadTier(cur, "thumb", "high")], curMid = loadTier(cur, "mid", "high");
+    rest.forEach(f => thumbs.push(loadTier(f, "thumb", "low")));
+    await Promise.all([...thumbs, curMid]);
+    if (!sessionLive(session)) return;
+    if (viewerImg && viewerImg.rank === 0 && !photoState(viewerImg.file).loaded.thumb && !photoState(viewerImg.file).loaded.mid) {
+      const err = document.createElement("div"); err.className = "media-error";
+      err.textContent = "This photo could not be loaded. Check that the filename exists in the repository.";
+      viewerMedia.replaceChildren(err); return;
+    }
+    await Promise.all(rest.map(f => loadTier(f, "mid", "low")));
+    if (!sessionLive(session)) return;
+    fullChain(post, session);
+    // Quietly warm the neighbouring posts so stepping up/down is instant.
+    const list = navList(), i = list.findIndex(p => p.id === post.id);
+    for (const n of [list[i + 1], list[i - 1]]) {
+      if (!n || n.type !== "image" || !sessionLive(session)) continue;
+      await loadTier(n.files[0], "thumb", "low"); if (sessionLive(session)) await loadTier(n.files[0], "mid", "low");
+    }
+  }
+  function showPhoto(post, idx) {
+    const file = post.files[idx];
+    const el = new Image(); el.decoding = "async"; el.className = "opened-image";
+    el.alt = `Hena post photograph${post.files.length > 1 ? ` ${idx + 1} of ${post.files.length}` : ""}`;
+    viewerImg = { el, rank: 0, file, postId: post.id, index: idx };
+    if (!photoSession || photoSession.postId !== post.id) {
+      photoSession = { postId: post.id, chaining: false };
+      post.files.forEach(f => { photoState(f).failed = {}; });
+      cancelPhotoLoads(f => post.files.includes(f));
+      orchestratePost(post, idx, photoSession);
+    } else {
+      // Moving inside the same post: stop the big download for the photo just left, favour this one.
+      cancelPhotoLoads((f, t) => post.files.includes(f) && (t !== "full" || f === file));
+      loadTier(file, "thumb", "high"); loadTier(file, "mid", "high");
+      fullChain(post, photoSession);
+    }
+    applyBest();
   }
 
   // Pre-warm: next/previous reels while one is playing (never while the main video is still loading).
-  const warmPool = new Map(); const WARM_MAX = 3;
+  const warmPool = new Map(); const WARM_MAX = LOW_END ? 1 : 3;
   function warmPost(post) {
-    if (!post || post.type !== "video" || warmPool.has(post.id)) return;
+    if (!post || post.type !== "video" || warmPool.has(post.id) || SLOW_NET) return;
     if (warmPool.size >= WARM_MAX) {
       const oldest = warmPool.keys().next().value, v = warmPool.get(oldest);
       try { v.removeAttribute("src"); v.load(); } catch (_) {}
@@ -257,10 +458,9 @@
     gridObserver = new IntersectionObserver(entries => {
       for (const entry of entries) {
         const el = entry.target;
-        if (el.tagName === "VIDEO") { if (entry.isIntersecting) requestVideoTile(el); else releaseVideoTile(el); }
-        else if (entry.isIntersecting) { loadThumbnail(el, entry.intersectionRatio > 0); gridObserver.unobserve(el); }
+        if (entry.isIntersecting) requestTile(el); else releaseTile(el);
       }
-    }, { rootMargin: "200px 0px", threshold: 0.01 });
+    }, { rootMargin: "140px 0px", threshold: 0.01 });
     return gridObserver;
   }
   function watchTile(button) {
@@ -273,7 +473,7 @@
     const media = button.querySelector(".grid-media");
     if (!media) return;
     if (gridObserver) gridObserver.unobserve(media);
-    if (media.tagName === "VIDEO") releaseVideoTile(media);
+    releaseTile(media);
   }
 
   function makeSpacer(className, height) {
@@ -296,7 +496,7 @@
   function resetTiles() {
     if (gridObserver) { gridObserver.disconnect(); gridObserver = null; }
     for (const btn of tiles.values()) unwatchTile(btn);
-    tiles.clear(); tileQueue.length = 0; loadingTiles.clear();
+    tiles.clear(); imgPool.queue.length = 0; videoPool.queue.length = 0; imgPool.loading.clear(); videoPool.loading.clear();
     topSpacer = bottomSpacer = null; grid.replaceChildren();
   }
 
@@ -356,6 +556,7 @@
     $("status").textContent = visiblePosts.length ? `${visiblePosts.length.toLocaleString()} ${filter === "videos" ? "reels" : filter === "profile" ? "individual photo profiles" : "posts"}` : "No media files in this section.";
     if (updateUrl) updateUrlForPost(null, true);
     if (opened) closeViewer(false);
+    updatePreviews();
   }
 
   function cleanupViewerMedia() {
@@ -390,6 +591,7 @@
     const file = post.files[fileIndex], url = mediaUrl(file), urls = mediaUrls(file);
     showLoading(isVideo(file) ? "Loading reel…" : post.files.length > 1 ? `Loading photo ${fileIndex + 1} of ${post.files.length}…` : "Loading photo…");
     if (isVideo(file)) {
+      cancelPhotoLoads(() => false); photoSession = null; viewerImg = null;
       const video = document.createElement("video");
       video.controls = true; video.playsInline = true; video.preload = "auto"; video.controlsList = "nodownload";
       video.loop = true; video.setAttribute("playsinline", ""); video.setAttribute("webkit-playsinline", "");
@@ -434,17 +636,7 @@
       video.addEventListener("canplay", () => { if (current()) setTimeout(() => current() && warmNeighbours(post), 600); }, { once: true });
       video.src = url; busy(true); try { video.load(); } catch (_) {}
     } else {
-      const img = new Image();
-      img.alt = `Hena post photograph${post.files.length > 1 ? ` ${fileIndex + 1} of ${post.files.length}` : ""}`;
-      img.decoding = "async"; img.loading = "eager"; img.fetchPriority = "high"; img.className = "opened-image";
-      img.addEventListener("load", () => { if (opened && activeId === post.id && activeMediaIndex === fileIndex) { viewerMedia.replaceChildren(img); addCarouselControls(post, fileIndex); } }, { once: true });
-      img.addEventListener("error", () => {
-        if (!opened || activeId !== post.id || activeMediaIndex !== fileIndex) return;
-        const err = document.createElement("div"); err.className = "media-error";
-        err.textContent = "This photo could not be loaded. Check that the filename exists at the expected GitHub raw URL.";
-        viewerMedia.replaceChildren(err);
-      }, { once: true });
-      img.src = url;
+      showPhoto(post, fileIndex);
     }
   }
 
@@ -477,6 +669,7 @@
   function closeViewer(updateUrl = true) {
     if (!opened) return;
     opened = false; activeId = null; viewer.hidden = true; cleanupViewerMedia();
+    cancelPhotoLoads(() => false); photoSession = null; viewerImg = null;
     document.body.classList.remove("viewer-open"); resumeTileLoading();
     if (updateUrl) updateUrlForPost(null, true);
     if (lastFocused && lastFocused.isConnected) lastFocused.focus({ preventScroll: true });
@@ -553,12 +746,13 @@
 
   // Virtual scrolling: keep only visible rows plus a small buffer in the DOM.
   // Scrolling either direction replaces off-screen rows, releasing their video/media elements.
-  window.addEventListener("scroll", () => scheduleVirtualRender(false), { passive: true });
+  window.addEventListener("scroll", () => { scheduleVirtualRender(false); updatePreviews(); }, { passive: true });
   window.addEventListener("resize", () => scheduleVirtualRender(true), { passive: true });
 
   const initialUrl = new URL(location.href);
   const initialPostId = initialUrl.searchParams.get("post");
   const initialFilter = normalizeFilter(initialUrl.searchParams.get("filter") || "posts");
   renderGrid(["posts", "videos", "profile"].includes(initialFilter) ? initialFilter : "posts", false);
+  updatePreviews();
   if (initialPostId && byId.has(initialPostId)) openPost(initialPostId, false);
 })();

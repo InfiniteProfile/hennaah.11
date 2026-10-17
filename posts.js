@@ -540,3 +540,10 @@ function mediaUrls(filename) {
   return MEDIA_MIRRORS.map(base => base + path);
 }
 function mediaUrl(filename) { return mediaUrls(filename)[0]; }
+
+// Resized WebP copy of a photo from a free image CDN (wsrv.nl). Tiny files = fast on bad networks.
+// Every caller falls back to the original file if this service is unreachable.
+function imageVariant(filename, width, quality) {
+  const path = filename.split("/").map(part => encodeURIComponent(part)).join("/");
+  return "https://wsrv.nl/?url=" + encodeURIComponent(MEDIA_BASE + path) + "&w=" + width + "&q=" + quality + "&output=webp&we";
+}
