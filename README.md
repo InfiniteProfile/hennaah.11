@@ -11,7 +11,7 @@ A lightweight, static profile site for **Hena** (`hennaah.11`) designed for GitH
 
 ## Dataset coverage
 
-The supplied filename list contains 485 unique entries: 294 image files and 191 MP4 videos. Each filename is represented exactly once as an independent media item with a stable ID. The grid displays the source list in reverse order: newer-looking entries appear at the top and older-looking entries lower down. This is inferred from the filename-list order, not verified post timestamps. Similar-looking filenames are deliberately **not merged into carousels**, because filenames alone do not prove the files belong to the same Instagram post. This also ensures a photo and a video are never mixed inside one opened post.
+The supplied filename list contains 485 unique entries: 294 image files and 191 MP4 videos. Every source filename is preserved exactly once. Images sharing the same export ID are grouped into one swipeable carousel (for example, `igexport-ABC.jpg`, `igexport-ABC-2.jpg`, and `igexport-ABC-3.jpg`). The unsuffixed image appears first, followed by numbered variants in numeric order. Videos always remain separate reel posts, even if a video shares an ID with a photo group. The grid reverses the supplied list so newer-looking entries appear at the top and older-looking entries lower down; this is inferred from list order, not verified timestamps.
 
 Captions and timestamps remain empty because they were not provided. Follower/following counts and a biography are not fabricated.
 
@@ -40,17 +40,17 @@ The generated records have `caption: ""` and `timestamp: ""`. Display order is n
 
 ## Media sections
 
-- **Posts** — images only.
-- **Videos** — videos only.
-- **All profile** — every image and video, each as its own tile and its own post.
+- **Posts** — image posts; related image variants appear as one grouped carousel tile.
+- **Videos** — individual reel/video posts, never merged into photo carousels.
+- **All profile** — every photo group and every reel together in the same profile-style grid. Photo groups display a stacked-photo marker and item count; reels display a custom reel/play marker.
 
-No inferred carousel grouping is applied. A photo and similarly named video remain separate posts.
+Image groups use the filename export-ID pattern as a practical grouping rule. This is inferred from the filenames rather than verified Instagram carousel metadata. A similarly named video always remains a separate reel post.
 
 ## Loading and performance
 
 The full selected grid is rendered without pagination, but thumbnails load only near the viewport using `IntersectionObserver`. The opened original media receives high loading priority; images use eager loading and `fetchPriority="high"` in the viewer. Videos in the grid use metadata-only loading, while a video opened in the viewer loads on demand with native browser controls. Closing a post pauses videos, removes their source, and calls `load()` to release active media references. Browser cache contents and memory reclamation remain controlled by the browser.
 
-Opened photos and videos use `object-fit: contain` and preserve their aspect ratio. Grid thumbnails intentionally use `object-fit: cover` for the square grid.
+Opened photos and videos use `object-fit: contain` and preserve their aspect ratio. Grouped photos have on-image previous/next controls, a position counter, keyboard-arrow navigation, and mobile swipe support. Grid thumbnails intentionally use `object-fit: cover` for the square grid.
 
 ## Dark mode
 

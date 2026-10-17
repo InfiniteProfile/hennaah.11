@@ -1,7 +1,6 @@
 /* Generated from all 485 filenames in the supplied list.
- * Every filename is represented exactly once as its own independent media post.
- * Similar-looking filenames are intentionally NOT merged: the source contains no confirmed carousel metadata.
- * Stable IDs are derived from each exact filename, so adding other files does not renumber existing posts.
+ * Same-ID image variants are grouped into photo carousels; videos always remain separate reel posts.
+ * Every source filename is preserved exactly once. IDs are deterministic from the group key or exact video filename.
  */
 const MEDIA_BASE = "https://raw.githubusercontent.com/InfiniteProfile/hennaah.11/main/";
 const PROFILE_PHOTO_PATH = "profile photo/igexport-DVY7NlejDJ9-6.jpg";
@@ -504,15 +503,28 @@ function stableId(filename) {
   return "media-" + (hash >>> 0).toString(16).padStart(8, "0");
 }
 function buildPosts() {
-  // Display newest-looking source entries first and older entries progressively lower.
-  // IDs remain filename-derived and therefore do not change when display order changes.
-  return MEDIA_FILES.slice().reverse().map(file => ({
-    id: stableId(file),
-    type: mediaType(file),
-    files: [file],
-    caption: "",
-    timestamp: ""
-  }));
+  // Reverse the supplied list for display, then regroup image variants by their shared export ID.
+  // Videos are always independent reel posts, even when their ID matches a photo group.
+  const ordered = MEDIA_FILES.slice().reverse();
+  const grouped = new Map();
+  ordered.forEach((file, order) => {
+    const type = mediaType(file);
+    const imageGroupKey = type === "image" ? file.replace(/-\d+(?=\.(?:jpe?g|png|webp|gif)$)/i, "") : null;
+    const key = type === "video" ? `video:${file}` : `photos:${imageGroupKey}`;
+    if (!grouped.has(key)) grouped.set(key, { id: stableId(type === "video" ? file : imageGroupKey), type, files: [], caption: "", timestamp: "", _order: order });
+    grouped.get(key).files.push(file);
+  });
+  const result = [...grouped.values()];
+  for (const post of result) {
+    if (post.type === "image") {
+      post.files.sort((a, b) => {
+        const rank = file => { const m = file.match(/-(\d+)(?=\.(?:jpe?g|png|webp|gif)$)/i); return m ? Number(m[1]) : 1; };
+        return rank(a) - rank(b) || a.localeCompare(b);
+      });
+    }
+    delete post._order;
+  }
+  return result;
 }
 const posts = buildPosts();
 function mediaUrl(filename) {
