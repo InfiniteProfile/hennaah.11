@@ -1,73 +1,235 @@
 (() => {
   "use strict";
-  const PAGE_SIZE = 50;
-  const $ = (id) => document.getElementById(id);
-  const grid = $("grid"), pagination = $("pagination"), viewer = $("viewer"), viewerMedia = $("viewerMedia");
+  const $ = id => document.getElementById(id);
+  const grid = $("grid"), viewer = $("viewer"), viewerMedia = $("viewerMedia");
   const profilePhotoUrl = mediaUrl(PROFILE_PHOTO_PATH);
-  $("profilePhoto").src = profilePhotoUrl; $("viewerAvatar").src = profilePhotoUrl;
-  $("postCount").textContent = posts.length.toLocaleString();
-  const byId = new Map(posts.map((post, index) => [post.id, {post, index}]));
-  let currentPage = 1, activeIndex = -1, activeMediaIndex = 0, gridObserver = null, opened = false;
-  const mediaObservers = new Set();
-  function pageFromUrl(){ const n=Number(new URL(location.href).searchParams.get("page")); return Number.isInteger(n)&&n>0&&n<=Math.max(1,Math.ceil(posts.length/PAGE_SIZE))?n:1; }
-  function urlForPage(page){ const u=new URL(location.href); if(page<=1)u.searchParams.delete("page");else u.searchParams.set("page",String(page));u.searchParams.delete("post");return u; }
-  function setStatus(text){$("status").textContent=text||"";}
-  function makeThumbnail(post,index){
-    const button=document.createElement("button");button.className="grid-item";button.type="button";button.dataset.index=String(index);button.setAttribute("aria-label",`Open post ${index+1}`);
-    const file=post.files[0], url=mediaUrl(file);
-    if(/\.(mp4|webm)$/i.test(file)){
-      const video=document.createElement("video");video.muted=true;video.playsInline=true;video.preload="none";video.setAttribute("aria-label","Video thumbnail");video.dataset.src=url;video.loading="lazy";button.append(video);
-      const mark=document.createElement("span");mark.className="video-mark";mark.textContent="▻";button.append(mark);
-    }else{const img=document.createElement("img");img.alt="";img.loading="lazy";img.decoding="async";img.dataset.src=url;button.append(img);}
-    if(post.files.length>1){const mark=document.createElement("span");mark.className="carousel-mark";mark.textContent="▧";button.append(mark);}
-    button.addEventListener("click",()=>openPost(index,true));return button;
+  $("profilePhoto").src = profilePhotoUrl;
+  $("viewerAvatar").src = profilePhotoUrl;
+
+  const photos = posts.filter(post => post.type === "image");
+  const videos = posts.filter(post => post.type === "video");
+  const byId = new Map(posts.map(post => [post.id, post]));
+  let filter = "photos", visiblePosts = photos, activeId = null, opened = false;
+  let gridObserver = null, lastFocused = null, pointerStartX = null;
+
+  const savedTheme = (() => { try { return localStorage.getItem("hena-theme"); } catch (_) { return null; } })();
+  const prefersDark = window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches;
+  applyTheme(savedTheme || (prefersDark ? "dark" : "light"));
+
+  $("postCount").textContent = photos.length.toLocaleString();
+  $("videoCount").textContent = videos.length.toLocaleString();
+
+  function applyTheme(theme) {
+    document.body.classList.toggle("dark", theme === "dark");
+    const dark = theme === "dark";
+    const button = $("themeToggle");
+    if (button) {
+      button.innerHTML = dark ? '<span aria-hidden="true">☀</span><span class="theme-label">Light mode</span>' : '<span aria-hidden="true">☾</span><span class="theme-label">Dark mode</span>';
+      button.setAttribute("aria-label", dark ? "Switch to light mode" : "Switch to dark mode");
+      button.title = dark ? "Switch to light mode" : "Switch to dark mode";
+    }
+    const meta = $("themeColorMeta"); if (meta) meta.content = dark ? "#000000" : "#ffffff";
   }
-  function setupLazyMedia(){
-    if(gridObserver)gridObserver.disconnect();
-    const targets=grid.querySelectorAll("[data-src]");
-    if(!("IntersectionObserver" in window)){targets.forEach(loadThumb);return;}
-    gridObserver=new IntersectionObserver(entries=>entries.forEach(entry=>{if(entry.isIntersecting){loadThumb(entry.target);gridObserver.unobserve(entry.target);}}),{rootMargin:"250px"});
-    targets.forEach(el=>gridObserver.observe(el));
+
+  function isVideo(file) { return /\.(mp4|webm)$/i.test(file); }
+  function updateUrlForPost(post, push = true) {
+    const u = new URL(location.href);
+    if (post) { u.searchParams.set("post", post.id); u.searchParams.delete("filter"); }
+    else { u.searchParams.delete("post"); if (filter === "photos") u.searchParams.delete("filter"); else u.searchParams.set("filter", filter); }
+    if (push) history.pushState({ post: post ? post.id : null, filter }, "", u);
+    else history.replaceState({ post: post ? post.id : null, filter }, "", u);
   }
-  function loadThumb(el){if(!el.isConnected||!el.dataset.src)return;el.src=el.dataset.src;delete el.dataset.src;if(el.tagName==="VIDEO"){el.addEventListener("error",()=>{el.style.opacity=".15";},{once:true});el.preload="metadata";}}
-  function renderPage(page,updateUrl=true){
-    if(gridObserver){gridObserver.disconnect();gridObserver=null;}
-    grid.replaceChildren();pagination.replaceChildren();currentPage=Math.max(1,Math.min(page,Math.max(1,Math.ceil(posts.length/PAGE_SIZE))));
-    const start=(currentPage-1)*PAGE_SIZE, end=Math.min(start+PAGE_SIZE,posts.length), fragment=document.createDocumentFragment();
-    for(let i=start;i<end;i++)fragment.append(makeThumbnail(posts[i],i));grid.append(fragment);setupLazyMedia();renderPagination();
-    if(updateUrl)history.pushState({page:currentPage},"",urlForPage(currentPage));setStatus(posts.length?`${start+1}–${end} of ${posts.length} posts`:"No media files found.");
-    if(opened)closeViewer(false);window.scrollTo({top:0,behavior:"auto"});
+
+  function makeThumbnail(post, index) {
+    const file = post.files[0];
+    const button = document.createElement("button");
+    button.className = "grid-item"; button.type = "button"; button.dataset.id = post.id;
+    button.setAttribute("aria-label", `Open ${post.type === "video" ? "video" : "photo"} ${index + 1}`);
+    const media = document.createElement(isVideo(file) ? "video" : "img");
+    media.className = "grid-media";
+    media.dataset.src = mediaUrl(file);
+    if (media.tagName === "IMG") { media.alt = ""; media.loading = "lazy"; media.decoding = "async"; media.fetchPriority = "low"; }
+    else { media.muted = true; media.playsInline = true; media.preload = "none"; media.setAttribute("aria-label", "Video thumbnail"); }
+    button.append(media);
+    if (post.type === "video") { const mark = document.createElement("span"); mark.className = "video-mark"; mark.setAttribute("aria-hidden", "true"); mark.textContent = "▻"; button.append(mark); }
+    button.addEventListener("click", () => openPost(post.id, true));
+    return button;
   }
-  function renderPagination(){
-    const total=Math.ceil(posts.length/PAGE_SIZE);if(total<=1)return;
-    const add=(label,page,disabled=false,active=false)=>{const b=document.createElement("button");b.className="page-button"+(active?" active":"");b.textContent=label;b.disabled=disabled;b.setAttribute("aria-label",label==="…"?"More pages":`Page ${label}`);if(!disabled&&label!=="…")b.addEventListener("click",()=>renderPage(page));pagination.append(b);};
-    add("Previous",currentPage-1,currentPage===1);
-    const nums=new Set([1,total,currentPage,currentPage-1,currentPage+1,currentPage-2,currentPage+2].filter(n=>n>=1&&n<=total));let prev=0;
-    [...nums].sort((a,b)=>a-b).forEach(n=>{if(prev&&n-prev>1)add("…",n,true);add(String(n),n,false,n===currentPage);prev=n;});
-    add("Next",currentPage+1,currentPage===total);
+
+  function loadThumbnail(el) {
+    if (!el.isConnected || !el.dataset.src) return;
+    const src = el.dataset.src; delete el.dataset.src;
+    if (el.tagName === "VIDEO") {
+      // A tiny muted preview is enough for the grid; full video loading waits until opening.
+      el.src = src; el.preload = "metadata";
+      el.addEventListener("error", () => { if (el.isConnected) el.classList.add("media-unavailable"); }, { once: true });
+    } else {
+      el.src = src;
+      el.addEventListener("error", () => { if (el.isConnected) { el.closest(".grid-item")?.classList.add("media-unavailable"); el.removeAttribute("src"); } }, { once: true });
+    }
   }
-  function cleanupMedia(){viewerMedia.querySelectorAll("video").forEach(v=>{try{v.pause();v.removeAttribute("src");v.load();}catch(e){}});viewerMedia.replaceChildren();}
-  function showMedia(){
-    cleanupMedia();const post=posts[activeIndex];activeMediaIndex=Math.max(0,Math.min(activeMediaIndex,post.files.length-1));const file=post.files[activeMediaIndex],url=mediaUrl(file);
-    if(/\.(mp4|webm)$/i.test(file)){
-      const v=document.createElement("video");v.controls=true;v.playsInline=true;v.preload="none";v.controlsList="nodownload";v.setAttribute("aria-label","Post video");v.style.objectFit="contain";v.src=url;
-      v.addEventListener("error",()=>{if(!v.isConnected)return;const e=document.createElement("div");e.className="media-error";e.textContent="This video could not be loaded. The file may be missing or unsupported.";viewerMedia.replaceChildren(e);},{once:true});
-      viewerMedia.append(v);const playPromise=v.play();if(playPromise&&playPromise.catch)playPromise.catch(()=>{});
-    }else{const img=document.createElement("img");img.alt="Hena post photograph";img.decoding="async";img.src=url;img.addEventListener("error",()=>{if(!img.isConnected)return;const e=document.createElement("div");e.className="media-error";e.textContent="This image could not be loaded. Check that the file exists in the repository.";viewerMedia.replaceChildren(e);},{once:true});viewerMedia.append(img);}
-    const multi=post.files.length>1;$("carouselControls").hidden=!multi;$("carouselPosition").textContent=`${activeMediaIndex+1}/${post.files.length}`;$("carouselPrev").disabled=activeMediaIndex===0;$("carouselNext").disabled=activeMediaIndex===post.files.length-1;
+
+  function setupLazyMedia() {
+    if (gridObserver) gridObserver.disconnect();
+    const targets = grid.querySelectorAll("[data-src]");
+    if (!("IntersectionObserver" in window)) { targets.forEach(loadThumbnail); return; }
+    gridObserver = new IntersectionObserver(entries => {
+      for (const entry of entries) if (entry.isIntersecting) { loadThumbnail(entry.target); gridObserver.unobserve(entry.target); }
+    }, { rootMargin: "120px 0px", threshold: 0.01 });
+    targets.forEach(el => gridObserver.observe(el));
   }
-  function syncViewerUrl(){const u=new URL(location.href);u.searchParams.set("post",posts[activeIndex].id);u.searchParams.delete("page");history.replaceState({post:posts[activeIndex].id},"",u);}
-  function openPost(index,updateUrl){activeIndex=index;activeMediaIndex=0;opened=true;viewer.hidden=false;document.body.classList.add("viewer-open");$("viewerCaption").replaceChildren();const post=posts[index];if(post.caption){const name=document.createElement("span");name.className="caption-user";name.textContent="hennaah.11";$("viewerCaption").append(name,document.createTextNode(post.caption));}$("viewerDate").textContent=post.timestamp||"";$("likeButton").classList.remove("liked");$("saveButton").classList.remove("liked");showMedia();$("previousPost").disabled=index===0;$("nextPost").disabled=index===posts.length-1;if(updateUrl)syncViewerUrl();else{const u=new URL(location.href);u.searchParams.set("post",post.id);history.replaceState({post:post.id},"",u);}$("linkStatus").textContent="";$("closeViewer").focus();}
-  function closeViewer(updateUrl=true){if(!opened)return;opened=false;viewer.hidden=true;cleanupMedia();document.body.classList.remove("viewer-open");if(updateUrl){const u=new URL(location.href);u.searchParams.delete("post");if(currentPage>1)u.searchParams.set("page",String(currentPage));history.pushState({page:currentPage},"",u);}const tile=grid.querySelector(`[data-index="${activeIndex}"]`);if(tile)tile.focus({preventScroll:true});}
-  function stepPost(delta){const n=activeIndex+delta;if(n<0||n>=posts.length)return;const targetPage=Math.floor(n/PAGE_SIZE)+1;if(targetPage!==currentPage)renderPage(targetPage,false);openPost(n,true);}
-  function stepCarousel(delta){const post=posts[activeIndex],next=activeMediaIndex+delta;if(next<0||next>=post.files.length)return;activeMediaIndex=next;showMedia();}
-  $("closeViewer").addEventListener("click",()=>closeViewer());$("previousPost").addEventListener("click",()=>stepPost(-1));$("nextPost").addEventListener("click",()=>stepPost(1));$("carouselPrev").addEventListener("click",()=>stepCarousel(-1));$("carouselNext").addEventListener("click",()=>stepCarousel(1));
-  viewer.addEventListener("click",e=>{if(e.target===viewer)closeViewer();});document.addEventListener("keydown",e=>{if(!opened)return;if(e.key==="Escape")closeViewer();if(e.key==="ArrowLeft")stepCarousel(activeMediaIndex>0?-1:0);if(e.key==="ArrowRight")stepCarousel(activeMediaIndex<posts[activeIndex].files.length-1?1:0);});
-  $("likeButton").addEventListener("click",()=>{$("likeButton").classList.toggle("liked");$("likeButton").textContent=$("likeButton").classList.contains("liked")?"♥":"♡";});$("saveButton").addEventListener("click",()=>$("saveButton").classList.toggle("liked"));$("shareButton").addEventListener("click",async()=>{try{await navigator.clipboard.writeText(location.href);$("linkStatus").textContent="Post link copied";}catch(e){$("linkStatus").textContent="Copy the address bar link to share";}});
-  $("themeToggle").addEventListener("click",()=>{document.body.classList.toggle("dark");localStorage.setItem("hena-dark",document.body.classList.contains("dark")?"1":"0");});if(localStorage.getItem("hena-dark")==="1")document.body.classList.add("dark");
-  $("followButton").addEventListener("click",()=>{const b=$("followButton"),on=b.dataset.following==="1";b.dataset.following=on?"0":"1";b.textContent=on?"Follow":"Following";b.style.background=on?"var(--button)":"var(--hover)";b.style.color=on?"#fff":"var(--text)";});
-  // A light touch swipe recognizer for carousel media; native video gestures remain available.
-  let touchX=0;viewerMedia.addEventListener("touchstart",e=>{touchX=e.changedTouches[0].clientX;},{passive:true});viewerMedia.addEventListener("touchend",e=>{const dx=e.changedTouches[0].clientX-touchX;if(Math.abs(dx)>65&&posts[activeIndex].files.length>1)stepCarousel(dx<0?1:-1);},{passive:true});
-  window.addEventListener("popstate",()=>{const u=new URL(location.href),pid=u.searchParams.get("post"),entry=pid?byId.get(pid):null;if(entry){const page=Math.floor(entry.index/PAGE_SIZE)+1;if(page!==currentPage)renderPage(page,false);openPost(entry.index,false);}else{if(opened)closeViewer(false);renderPage(pageFromUrl(),false);}});
-  renderPage(pageFromUrl(),false);const initialPost=new URL(location.href).searchParams.get("post");if(initialPost&&byId.has(initialPost)){const entry=byId.get(initialPost);const page=Math.floor(entry.index/PAGE_SIZE)+1;if(page!==currentPage)renderPage(page,false);openPost(entry.index,false);}
+
+  function renderGrid(nextFilter, updateUrl = true) {
+    filter = nextFilter;
+    visiblePosts = filter === "videos" ? videos : filter === "all" ? posts : photos;
+    if (gridObserver) { gridObserver.disconnect(); gridObserver = null; }
+    grid.replaceChildren();
+    const fragment = document.createDocumentFragment();
+    visiblePosts.forEach((post, i) => fragment.append(makeThumbnail(post, i)));
+    grid.append(fragment);
+    setupLazyMedia();
+    document.querySelectorAll(".tab").forEach(tab => {
+      const active = tab.dataset.filter === filter;
+      tab.classList.toggle("active", active); tab.setAttribute("aria-pressed", String(active));
+    });
+    $("status").textContent = visiblePosts.length ? `${visiblePosts.length.toLocaleString()} ${filter === "videos" ? "videos" : filter === "photos" ? "photos" : "media items"}` : "No media files in this section.";
+    if (updateUrl) updateUrlForPost(null, true);
+    if (opened) closeViewer(false);
+  }
+
+  function cleanupViewerMedia() {
+    viewerMedia.querySelectorAll("video").forEach(video => {
+      try { video.pause(); video.removeAttribute("src"); video.load(); } catch (_) {}
+    });
+    viewerMedia.replaceChildren();
+  }
+
+  function showLoading(message = "Loading media…") {
+    const state = document.createElement("div"); state.className = "media-loading";
+    const spinner = document.createElement("span"); spinner.className = "spinner"; spinner.setAttribute("aria-hidden", "true");
+    const label = document.createElement("span"); label.textContent = message;
+    state.append(spinner, label); viewerMedia.replaceChildren(state);
+  }
+
+  function showMedia(post) {
+    cleanupViewerMedia();
+    const file = post.files[0], url = mediaUrl(file);
+    showLoading(isVideo(file) ? "Loading video…" : "Loading photo…");
+    if (isVideo(file)) {
+      const video = document.createElement("video");
+      video.controls = true; video.playsInline = true; video.preload = "auto"; video.controlsList = "nodownload";
+      video.setAttribute("aria-label", "Post video"); video.style.objectFit = "contain";
+      video.addEventListener("loadeddata", () => { if (video.isConnected) viewerMedia.replaceChildren(video); }, { once: true });
+      video.addEventListener("error", () => {
+        if (!video.isConnected) return;
+        const err = document.createElement("div"); err.className = "media-error";
+        err.textContent = "This video could not be loaded. Check that the file exists in the repository and is supported by your browser.";
+        viewerMedia.replaceChildren(err);
+      }, { once: true });
+      viewerMedia.querySelector(".media-loading")?.append(video);
+      video.src = url;
+      video.load();
+      // Do not force autoplay: the visitor gets reliable native controls and the player is ready promptly.
+    } else {
+      const img = new Image();
+      img.alt = "Hena post photograph"; img.decoding = "async"; img.loading = "eager"; img.fetchPriority = "high";
+      img.className = "opened-image";
+      img.addEventListener("load", () => { if (opened && activeId === post.id) viewerMedia.replaceChildren(img); }, { once: true });
+      img.addEventListener("error", () => {
+        if (!opened || activeId !== post.id) return;
+        const err = document.createElement("div"); err.className = "media-error";
+        err.textContent = "This photo could not be loaded. Check that the filename exists at the expected GitHub raw URL.";
+        viewerMedia.replaceChildren(err);
+      }, { once: true });
+      img.src = url;
+    }
+  }
+
+  function syncPostButtons(post) {
+    const index = posts.findIndex(item => item.id === post.id);
+    $("previousPost").disabled = index <= 0;
+    $("nextPost").disabled = index < 0 || index >= posts.length - 1;
+  }
+
+  function openPost(id, updateUrl = true) {
+    const post = byId.get(id); if (!post) return;
+    activeId = id; opened = true; lastFocused = document.activeElement;
+    viewer.hidden = false; document.body.classList.add("viewer-open");
+    $("viewerCaption").replaceChildren(); $("viewerDate").textContent = post.timestamp || "";
+    if (post.caption) {
+      const username = document.createElement("span"); username.className = "caption-user"; username.textContent = "hennaah.11";
+      $("viewerCaption").append(username, document.createTextNode(post.caption));
+    }
+    $("likeButton").classList.remove("liked"); $("likeButton").textContent = "♡";
+    $("saveButton").classList.remove("liked");
+    showMedia(post); syncPostButtons(post);
+    if (updateUrl) updateUrlForPost(post, true); else updateUrlForPost(post, false);
+    $("linkStatus").textContent = ""; $("closeViewer").focus();
+  }
+
+  function closeViewer(updateUrl = true) {
+    if (!opened) return;
+    opened = false; activeId = null; viewer.hidden = true; cleanupViewerMedia();
+    document.body.classList.remove("viewer-open");
+    if (updateUrl) updateUrlForPost(null, true);
+    if (lastFocused && lastFocused.isConnected) lastFocused.focus({ preventScroll: true });
+  }
+
+  function stepPost(delta) {
+    const index = posts.findIndex(post => post.id === activeId), next = index + delta;
+    if (next < 0 || next >= posts.length) return;
+    const post = posts[next];
+    // Switch the active filter only if needed, then prioritize the selected original media.
+    const belongs = filter === "all" || (filter === "videos" && post.type === "video") || (filter === "photos" && post.type === "image");
+    if (!belongs) renderGrid(post.type === "video" ? "videos" : "photos", false);
+    openPost(post.id, true);
+  }
+
+  document.querySelectorAll(".tab").forEach(tab => tab.addEventListener("click", () => renderGrid(tab.dataset.filter, true)));
+  $("themeToggle").addEventListener("click", () => {
+    const next = document.body.classList.contains("dark") ? "light" : "dark";
+    applyTheme(next); try { localStorage.setItem("hena-theme", next); } catch (_) {}
+  });
+  $("closeViewer").addEventListener("click", () => closeViewer());
+  $("previousPost").addEventListener("click", () => stepPost(-1));
+  $("nextPost").addEventListener("click", () => stepPost(1));
+  viewer.addEventListener("click", event => { if (event.target === viewer) closeViewer(); });
+  $("likeButton").addEventListener("click", () => { const liked = $("likeButton").classList.toggle("liked"); $("likeButton").textContent = liked ? "♥" : "♡"; });
+  $("saveButton").addEventListener("click", () => $("saveButton").classList.toggle("liked"));
+  $("shareButton").addEventListener("click", async () => {
+    try { await navigator.clipboard.writeText(location.href); $("linkStatus").textContent = "Post link copied"; }
+    catch (_) { $("linkStatus").textContent = "Copy the address-bar link to share"; }
+  });
+
+  document.addEventListener("keydown", event => {
+    if (!opened) return;
+    if (event.key === "Escape") closeViewer();
+    if (event.key === "ArrowLeft") stepPost(-1);
+    if (event.key === "ArrowRight") stepPost(1);
+  });
+  viewerMedia.addEventListener("touchstart", event => { pointerStartX = event.changedTouches[0].clientX; }, { passive: true });
+  viewerMedia.addEventListener("touchend", event => {
+    if (pointerStartX === null) return;
+    const dx = event.changedTouches[0].clientX - pointerStartX; pointerStartX = null;
+    if (Math.abs(dx) > 80 && !event.target.closest("video")) stepPost(dx < 0 ? 1 : -1);
+  }, { passive: true });
+
+  window.addEventListener("popstate", () => {
+    const url = new URL(location.href), postId = url.searchParams.get("post");
+    if (postId && byId.has(postId)) {
+      const post = byId.get(postId);
+      const requestedFilter = url.searchParams.get("filter") || (post.type === "video" ? "videos" : "photos");
+      renderGrid(requestedFilter, false); openPost(postId, false);
+    } else {
+      if (opened) closeViewer(false);
+      renderGrid(url.searchParams.get("filter") || "photos", false);
+    }
+  });
+
+  // Render the complete filtered grid in one pass; only near-viewport thumbnails fetch media.
+  const initialUrl = new URL(location.href);
+  const initialPostId = initialUrl.searchParams.get("post");
+  const initialFilter = initialUrl.searchParams.get("filter") || (initialPostId && byId.get(initialPostId)?.type === "video" ? "videos" : "photos");
+  renderGrid(["photos", "videos", "all"].includes(initialFilter) ? initialFilter : "photos", false);
+  if (initialPostId && byId.has(initialPostId)) openPost(initialPostId, false);
 })();

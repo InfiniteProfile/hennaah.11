@@ -1,8 +1,7 @@
-/* Hena media index generated from the complete uploaded filename list.
- * Source: 485 filenames; no duplicate filename entries found.
- * Grouping heuristic: numbered suffixes are grouped only when an unsuffixed
- * sibling with the same base stem exists. This is an inference, not Instagram metadata.
- * Edit CAROUSEL_GROUPS to force/override groups. See README.md.
+/* Generated from all 485 filenames in the supplied list.
+ * Every filename is represented exactly once as its own independent media post.
+ * Similar-looking filenames are intentionally NOT merged: the source contains no confirmed carousel metadata.
+ * Stable IDs are derived from each exact filename, so adding other files does not renumber existing posts.
  */
 const MEDIA_BASE = "https://raw.githubusercontent.com/InfiniteProfile/hennaah.11/main/";
 const PROFILE_PHOTO_PATH = "profile photo/igexport-DVY7NlejDJ9-6.jpg";
@@ -493,60 +492,27 @@ const MEDIA_FILES = [
   "igexport-DejBtLPDInv.jpg",
   "igexport-DejlndGMAdX.mp4"
 ];
-
-// Optional explicit grouping overrides. Each entry is an array of exact filenames.
-// Files listed here are grouped together; remove them from other groups if editing.
-const CAROUSEL_GROUPS = [
-  // Example: ["igexport-example.jpg", "igexport-example-2.jpg"]
-];
-
 function mediaType(filename) {
   return /\.(mp4|webm)$/i.test(filename) ? "video" : "image";
 }
-function stableId(value) {
-  // Deterministic and stable when unrelated files are added.
+function stableId(filename) {
   let hash = 2166136261;
-  for (let i = 0; i < value.length; i++) { hash ^= value.charCodeAt(i); hash = Math.imul(hash, 16777619); }
-  return "post-" + (hash >>> 0).toString(16).padStart(8, "0") + "-" + encodeURIComponent(value).replace(/%/g, "").replace(/[^a-zA-Z0-9_-]/g, "").slice(0, 18);
-}
-function filenameFamily(filename) {
-  const dot = filename.lastIndexOf(".");
-  const stem = dot >= 0 ? filename.slice(0, dot) : filename;
-  const ext = dot >= 0 ? filename.slice(dot) : "";
-  const match = stem.match(/^(.*?)-(\d+)$/);
-  return match ? { base: match[1], ext, numbered: true } : { base: stem, ext, numbered: false };
+  for (let i = 0; i < filename.length; i++) {
+    hash ^= filename.charCodeAt(i);
+    hash = Math.imul(hash, 16777619);
+  }
+  return "media-" + (hash >>> 0).toString(16).padStart(8, "0");
 }
 function buildPosts() {
-  const assigned = new Set();
-  const groups = [];
-  // Explicit groups have priority and preserve the exact filename strings.
-  for (const group of CAROUSEL_GROUPS) {
-    const valid = group.filter(f => MEDIA_FILES.includes(f) && !assigned.has(f));
-    if (valid.length) { groups.push(valid); valid.forEach(f => assigned.add(f)); }
-  }
-  const plainStems = new Set(MEDIA_FILES.map(f => { const dot=f.lastIndexOf("."); return dot<0?f:f.slice(0,dot); }));
-  const auto = new Map();
-  for (const f of MEDIA_FILES) {
-    if (assigned.has(f)) continue;
-    const fam = filenameFamily(f);
-    const familyHasVariants = MEDIA_FILES.some(x => x.startsWith(fam.base + "-") && /-\d+\.[^.]+$/.test(x));
-    const key = (fam.numbered && plainStems.has(fam.base)) || (!fam.numbered && familyHasVariants) ? "family:" + fam.base : "file:" + f;
-    if (!auto.has(key)) auto.set(key, []);
-    auto.get(key).push(f);
-  }
-  for (const group of auto.values()) {
-    group.sort((a,b) => {
-      const getN = x => { const m=x.match(/-(\d+)(?=\.[^.]+$)/); return m ? Number(m[1]) : 1; };
-      return getN(a)-getN(b) || MEDIA_FILES.indexOf(a)-MEDIA_FILES.indexOf(b);
-    });
-    groups.push(group);
-  }
-  // Post order follows the first occurrence in the uploaded filename list.
-  groups.sort((a,b) => Math.min(...a.map(f=>MEDIA_FILES.indexOf(f))) - Math.min(...b.map(f=>MEDIA_FILES.indexOf(f))));
-  return groups.map(files => {
-    const key = files.length > 1 ? filenameFamily(files.find(f => !/-(\d+)(?=\.[^.]+$)/.test(f)) || files[0]).base : files[0];
-    return { id: stableId(files.length > 1 ? key : files[0]), type: files.some(mediaType.bind(null)) && files.every(f => mediaType(f)==="video") ? "video" : "image", files, caption: "", timestamp: "" };
-  });
+  // Display newest-looking source entries first and older entries progressively lower.
+  // IDs remain filename-derived and therefore do not change when display order changes.
+  return MEDIA_FILES.slice().reverse().map(file => ({
+    id: stableId(file),
+    type: mediaType(file),
+    files: [file],
+    caption: "",
+    timestamp: ""
+  }));
 }
 const posts = buildPosts();
 function mediaUrl(filename) {

@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-  <meta name="theme-color" content="#ffffff">
+  <meta name="theme-color" content="#ffffff" id="themeColorMeta">
   <meta name="description" content="Hena — photo and video profile.">
   <title>Hena (@hennaah.11)</title>
   <link rel="stylesheet" href="style.css">
@@ -11,33 +11,41 @@
   <script src="script.js" defer></script>
 </head>
 <body>
-  <header class="topbar"><a class="wordmark" href="./" aria-label="Hena profile">Instagram</a><div class="top-actions"><button id="themeToggle" class="icon-button" aria-label="Toggle dark mode" title="Toggle dark mode">◐</button></div></header>
+  <header class="topbar">
+    <a class="wordmark" href="./" aria-label="Hena profile">Instagram</a>
+    <button id="themeToggle" class="icon-button theme-toggle" type="button" aria-label="Switch to dark mode" title="Switch to dark mode"><span aria-hidden="true">☾</span><span class="theme-label">Dark mode</span></button>
+  </header>
   <main class="page-shell">
     <section class="profile-header" aria-label="Profile header">
-      <div class="avatar-wrap"><img id="profilePhoto" class="profile-avatar" alt="Hena profile photo"></div>
-      <div class="profile-details"><div class="profile-title"><h1>hennaah.11</h1><button class="follow-button" type="button" id="followButton">Follow</button><button class="icon-button" type="button" aria-label="More options">•••</button></div>
-        <div class="stats"><span><strong id="postCount">0</strong> posts</span></div>
+      <div class="avatar-wrap"><img id="profilePhoto" class="profile-avatar" alt="Hena profile photo" fetchpriority="high"></div>
+      <div class="profile-details">
+        <div class="profile-title"><h1>hennaah.11</h1></div>
+        <div class="stats"><span><strong id="postCount">0</strong> posts</span><span><strong id="videoCount">0</strong> videos</span></div>
         <div class="display-name" id="displayName">Hena</div>
       </div>
     </section>
-    <nav class="tabs" aria-label="Profile content"><button class="tab active" aria-label="Posts" title="Posts">▦ <span>POSTS</span></button><button class="tab" aria-label="Reels" title="Reels">▻ <span>REELS</span></button><button class="tab" aria-label="Tagged" title="Tagged">♙ <span>TAGGED</span></button></nav>
-    <section id="grid" class="post-grid" aria-label="Posts"></section>
-    <nav id="pagination" class="pagination" aria-label="Post pages"></nav>
+    <nav class="tabs" aria-label="Profile media filters">
+      <button class="tab active" data-filter="photos" type="button" aria-pressed="true"><span class="tab-icon" aria-hidden="true">▦</span><span>POSTS</span></button>
+      <button class="tab" data-filter="videos" type="button" aria-pressed="false"><span class="tab-icon" aria-hidden="true">▻</span><span>VIDEOS</span></button>
+      <button class="tab" data-filter="all" type="button" aria-pressed="false"><span class="tab-icon" aria-hidden="true">▤</span><span>ALL PROFILE</span></button>
+    </nav>
+    <section id="grid" class="post-grid" aria-label="Profile media"></section>
     <p id="status" class="status" role="status" aria-live="polite"></p>
   </main>
+
   <div id="viewer" class="viewer" hidden role="dialog" aria-modal="true" aria-label="Post viewer">
-    <button id="closeViewer" class="viewer-close" aria-label="Close post">×</button>
-    <button id="previousPost" class="post-step prev" aria-label="Previous post">‹</button>
+    <button id="closeViewer" class="viewer-close" type="button" aria-label="Close post">×</button>
+    <button id="previousPost" class="post-step prev" type="button" aria-label="Previous post">‹</button>
     <article class="post-dialog">
-      <div id="viewerMedia" class="viewer-media"></div>
-      <aside class="post-sidebar"><header class="post-author"><img id="viewerAvatar" alt="" class="mini-avatar"><div><strong>hennaah.11</strong><small id="viewerDate"></small></div><button class="icon-button more-button" aria-label="More options">•••</button></header>
+      <div id="viewerMedia" class="viewer-media" aria-live="polite"></div>
+      <aside class="post-sidebar">
+        <header class="post-author"><img id="viewerAvatar" alt="" class="mini-avatar"><div><strong>hennaah.11</strong><small id="viewerDate"></small></div></header>
         <div id="viewerCaption" class="caption-area"></div>
-        <div class="post-actions"><button id="likeButton" class="action-button" aria-label="Like post" title="Like">♡</button><button class="action-button" aria-label="Comment" title="Comment">▢</button><button id="shareButton" class="action-button" aria-label="Copy post link" title="Copy post link">➤</button><button id="saveButton" class="action-button save-action" aria-label="Save post" title="Save">♧</button></div>
-        <div id="carouselControls" class="carousel-controls" hidden><button id="carouselPrev" aria-label="Previous media">‹</button><span id="carouselPosition">1/1</span><button id="carouselNext" aria-label="Next media">›</button></div>
-        <div class="sidebar-footer"><span id="linkStatus"></span><span>Media from repository</span></div>
+        <div class="post-actions"><button id="likeButton" class="action-button" type="button" aria-label="Like post" title="Like">♡</button><button class="action-button" type="button" aria-label="Comments unavailable" title="Comments are not supplied" disabled>▢</button><button id="shareButton" class="action-button" type="button" aria-label="Copy post link" title="Copy post link">➤</button><button id="saveButton" class="action-button save-action" type="button" aria-label="Save post locally for this session" title="Save">♧</button></div>
+        <div class="sidebar-footer"><span id="linkStatus" role="status"></span><span>Media from repository</span></div>
       </aside>
     </article>
-    <button id="nextPost" class="post-step next" aria-label="Next post">›</button>
+    <button id="nextPost" class="post-step next" type="button" aria-label="Next post">›</button>
   </div>
 </body>
 </html>
