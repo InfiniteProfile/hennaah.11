@@ -66,15 +66,13 @@
       const count = document.createElement("span"); count.className = "group-count"; count.textContent = String(post.files.length); count.setAttribute("aria-hidden", "true"); button.append(count);
     }
     if (post.type === "video") {
-      const warm = () => warmPost(post);
-      button.addEventListener("pointerenter", warm, { once: true });
-      button.addEventListener("touchstart", warm, { once: true, passive: true });
-      button.addEventListener("focus", warm, { once: true });
+      // Mouse hover only: on phones touch-scrolling would warm dozens of reels for nothing.
+      button.addEventListener("pointerenter", e => { if (e.pointerType === "mouse") warmPost(post); }, { once: true });
     }
     button.addEventListener("click", () => {
       // Promote the exact tile the viewer clicked, then prioritize its full-size original.
       const tileMedia = button.querySelector(".grid-media");
-      if (tileMedia?.dataset.src) loadThumbnail(tileMedia, true);
+      if (tileMedia?.tagName === "IMG" && tileMedia.dataset.src) loadThumbnail(tileMedia, true);
       openPost(post.id, true);
     });
     return button;
@@ -82,71 +80,111 @@
 
   function loadThumbnail(el, prioritize = false) {
     if (!el.isConnected || !el.dataset.src) return;
-    if (el.tagName === "IMG") {
-      el.fetchPriority = prioritize ? "high" : (el.fetchPriority || "low");
-      el.loading = prioritize ? "eager" : "lazy";
-    }
+    if (el.tagName === "VIDEO") { requestVideoTile(el); return; }
+    el.fetchPriority = prioritize ? "high" : (el.fetchPriority || "low");
+    el.loading = prioritize ? "eager" : "lazy";
     const src = el.dataset.src; delete el.dataset.src;
-    if (el.tagName === "VIDEO") {
-      el._src = src;
-      if (prioritize) startVideoTile(el); else { tileQueue.push(el); pumpTiles(); }
-    } else {
-      el.src = src;
-      el.addEventListener("error", () => { if (el.isConnected) { el.closest(".grid-item")?.classList.add("media-unavailable"); el.removeAttribute("src"); } }, { once: true });
-    }
+    el.src = src;
+    el.addEventListener("error", () => { if (el.isConnected) { el.closest(".grid-item")?.classList.add("media-unavailable"); el.removeAttribute("src"); } }, { once: true });
   }
 
-
-  // ---- Video loading engine -------------------------------------------------
-  // Grid tiles: only a few videos fetch at once (first frame only), so the reel the person
-  // is about to watch is never starved of bandwidth. Queue pauses while the viewer is open.
-  const tileQueue = []; let tileActive = 0, tilePaused = false;
-  const TILE_MAX = 4;
+  // ---- Video tile engine ----------------------------------------------------
+  // Only tiles that are on (or just next to) the screen load a video frame, nearest-to-centre
+  // first, 3 at a time. Once a frame is captured it is kept as a tiny poster image and the video
+  // connection is released. Tiles that scroll away are cancelled, so nothing piles up.
+  const tileQueue = []; const loadingTiles = new Set(); let tilePaused = false;
+  const TILE_MAX = 3;
   const posterCache = new Map();           // post id -> dataURL of first frame
+  const tileId = el => el.closest(".grid-item")?.dataset.id;
+
+  function requestVideoTile(el) {
+    if (el._state) return;
+    const id = tileId(el);
+    if (id && posterCache.has(id)) { el.poster = posterCache.get(id); el.classList.add("video-frame-ready"); el._state = "poster"; return; }
+    el._state = "queued"; tileQueue.push(el); pumpTiles();
+  }
+  function releaseVideoTile(el) {
+    const qi = tileQueue.indexOf(el); if (qi >= 0) tileQueue.splice(qi, 1);
+    const st = el._state; loadingTiles.delete(el); el._tok = (el._tok || 0) + 1;
+    if (st === "loading" || st === "ready") {
+      try { el.pause(); } catch (_) {}
+      el.removeAttribute("src"); try { el.load(); } catch (_) {}
+    }
+    if (el.poster) el._state = "poster"; else { el._state = null; el.classList.remove("video-frame-ready"); }
+    if (st === "loading") pumpTiles();
+  }
   function pumpTiles() {
-    while (!tilePaused && tileActive < TILE_MAX && tileQueue.length) {
-      const el = tileQueue.shift();
-      if (el.isConnected && el._src) startVideoTile(el);
+    while (!tilePaused && loadingTiles.size < TILE_MAX && tileQueue.length) {
+      const mid = window.innerHeight / 2; let best = 0, bestD = Infinity;
+      tileQueue.forEach((el, i) => {
+        const r = el.getBoundingClientRect(), d = Math.abs(r.top + r.height / 2 - mid);
+        if (d < bestD) { bestD = d; best = i; }
+      });
+      const el = tileQueue.splice(best, 1)[0];
+      if (el.isConnected && el._state === "queued") startVideoTile(el); else el._state = null;
     }
   }
   function capturePoster(el) {
-    const id = el.closest(".grid-item")?.dataset.id;
-    if (!id || posterCache.has(id) || !el.videoWidth) return;
+    const id = tileId(el);
+    if (!id || !el.videoWidth) return;
     try {
-      const c = document.createElement("canvas"), w = Math.min(540, el.videoWidth);
+      const c = document.createElement("canvas"), w = Math.min(420, el.videoWidth);
       c.width = w; c.height = Math.round(w * el.videoHeight / el.videoWidth);
       c.getContext("2d").drawImage(el, 0, 0, c.width, c.height);
-      posterCache.set(id, c.toDataURL("image/jpeg", 0.78));
+      const url = c.toDataURL("image/jpeg", 0.75);
+      posterCache.set(id, url); el.poster = url;
     } catch (_) {}
   }
   function startVideoTile(el) {
-    const src = el._src; if (!src) return; el._src = null;
-    tileActive++;
-    let finished = false, retried = false;
-    const finish = () => { if (finished) return; finished = true; tileActive = Math.max(0, tileActive - 1); pumpTiles(); };
-    const ready = () => {
-      if (el.isConnected) { el.classList.add("video-frame-ready"); capturePoster(el); try { el.pause(); } catch (_) {} }
-      el.preload = "metadata"; finish();
+    const src = el.dataset.src; if (!src) { el._state = null; return; }
+    const token = el._tok = (el._tok || 0) + 1;
+    let done = false, retried = false;
+    el._state = "loading"; loadingTiles.add(el);
+    const finish = ok => {
+      if (done || el._tok !== token) return;
+      done = true; clearTimeout(timer); loadingTiles.delete(el);
+      if (ok) {
+        el.classList.add("video-frame-ready"); capturePoster(el);
+        if (el.poster) { el._state = "poster"; try { el.pause(); } catch (_) {} el.removeAttribute("src"); try { el.load(); } catch (_) {} }
+        else el._state = "ready";
+      } else {
+        el._state = null; el.removeAttribute("src"); try { el.load(); } catch (_) {}
+        if (!el._retried) { el._retried = true; setTimeout(() => { if (el.isConnected && !el._state && !tilePaused) requestVideoTile(el); }, 2500); }
+        else if (el.isConnected) el.closest(".grid-item")?.classList.add("media-unavailable");
+      }
+      pumpTiles();
     };
+    const timer = setTimeout(() => finish(el.readyState >= 2), 10000);
     el.preload = "metadata";
-    el.crossOrigin = "anonymous";            // lets us copy the frame to a poster image
-    el.addEventListener("loadeddata", ready, { once: true });
-    el.addEventListener("seeked", ready, { once: true });
+    el.crossOrigin = "anonymous";            // lets us copy the frame into a poster image
+    el.addEventListener("loadeddata", () => finish(true), { once: true });
+    el.addEventListener("seeked", () => finish(true), { once: true });
     el.addEventListener("error", () => {
-      if (!retried && el.crossOrigin) {      // CORS problem? retry plain, thumbnail still works
+      if (done || el._tok !== token) return;
+      if (!retried) {                        // CORS problem? retry plain; the frame still shows
         retried = true; el.removeAttribute("crossorigin"); el.src = src + "#t=0.1"; try { el.load(); } catch (_) {}
         return;
       }
-      if (el.isConnected) el.closest(".grid-item")?.classList.add("media-unavailable");
-      finish();
+      finish(false);
     });
-    setTimeout(finish, 9000);
     el.src = src + "#t=0.1";                 // #t=0.1 makes the browser show a real frame, not black
     try { el.load(); } catch (_) {}
   }
+  function pauseTileLoading() {
+    tilePaused = true;
+    for (const el of [...loadingTiles]) releaseVideoTile(el);   // free the connection for the reel being opened
+  }
+  function resumeTileLoading() {
+    tilePaused = false;
+    grid.querySelectorAll("video.grid-media").forEach(el => {
+      if (el._state) return;
+      const r = el.getBoundingClientRect();
+      if (r.bottom > -250 && r.top < window.innerHeight + 250) requestVideoTile(el);
+    });
+    pumpTiles();
+  }
 
-  // Pre-warm: the reels most likely to be watched next (hovered/touched tile, next and
-  // previous reel in the viewer) get a hidden <video preload=auto> so bytes are cached.
+  // Pre-warm: next/previous reels while one is playing (never while the main video is still loading).
   const warmPool = new Map(); const WARM_MAX = 3;
   function warmPost(post) {
     if (!post || post.type !== "video" || warmPool.has(post.id)) return;
@@ -162,11 +200,11 @@
   }
   function warmNeighbours(post) {
     const list = filter === "videos" ? videos : posts, i = list.findIndex(p => p.id === post.id);
-    for (const p of [list[i + 1], list[i + 2], list[i - 1]]) warmPost(p);
+    for (const p of [list[i + 1], list[i - 1], list[i + 2]]) warmPost(p);
   }
 
   let virtualStart = -1, virtualEnd = -1, virtualFrame = 0;
-  const VIRTUAL_OVERSCAN_ROWS = 3;
+  const VIRTUAL_OVERSCAN_ROWS = 2;
   let virtualColumns = 3;
 
   function gridMetrics() {
@@ -183,33 +221,56 @@
     return { columns, rowPitch: tile + gap, gap, padTop };
   }
 
-  function setupLazyMedia() {
-    if (gridObserver) gridObserver.disconnect();
-    const targets = grid.querySelectorAll("[data-src]");
-    if (!("IntersectionObserver" in window)) { targets.forEach(el => loadThumbnail(el, true)); return; }
+  function ensureObserver() {
+    if (gridObserver) return gridObserver;
     gridObserver = new IntersectionObserver(entries => {
-      for (const entry of entries) if (entry.isIntersecting) {
-        loadThumbnail(entry.target, entry.intersectionRatio > 0);
-        gridObserver.unobserve(entry.target);
+      for (const entry of entries) {
+        const el = entry.target;
+        if (el.tagName === "VIDEO") { if (entry.isIntersecting) requestVideoTile(el); else releaseVideoTile(el); }
+        else if (entry.isIntersecting) { loadThumbnail(el, entry.intersectionRatio > 0); gridObserver.unobserve(el); }
       }
-    }, { rootMargin: "280px 0px", threshold: 0.01 });
-    targets.forEach(el => gridObserver.observe(el));
+    }, { rootMargin: "200px 0px", threshold: 0.01 });
+    return gridObserver;
+  }
+  function watchTile(button) {
+    const media = button.querySelector(".grid-media");
+    if (!media || !media.dataset.src) return;
+    if (!("IntersectionObserver" in window)) { loadThumbnail(media, true); return; }
+    ensureObserver().observe(media);
+  }
+  function unwatchTile(button) {
+    const media = button.querySelector(".grid-media");
+    if (!media) return;
+    if (gridObserver) gridObserver.unobserve(media);
+    if (media.tagName === "VIDEO") releaseVideoTile(media);
   }
 
   function makeSpacer(className, height) {
     const spacer = document.createElement("div");
     spacer.className = `virtual-spacer ${className}`;
     spacer.setAttribute("aria-hidden", "true");
-    spacer.style.height = `${Math.max(0, height)}px`;
     spacer.style.gridColumn = "1 / -1";
     spacer.style.pointerEvents = "none";
+    setSpacer(spacer, height);
     return spacer;
+  }
+  function setSpacer(spacer, height) {
+    spacer.style.height = `${Math.max(0, height)}px`;
+    spacer.style.display = height > 0 ? "" : "none";
+  }
+
+  // Sliding window: tiles scrolled out of range are removed (and their downloads cancelled);
+  // new tiles are created only for rows entering the window, in either scroll direction.
+  const tiles = new Map(); let topSpacer = null, bottomSpacer = null;
+  function resetTiles() {
+    if (gridObserver) { gridObserver.disconnect(); gridObserver = null; }
+    for (const btn of tiles.values()) unwatchTile(btn);
+    tiles.clear(); tileQueue.length = 0; loadingTiles.clear();
+    topSpacer = bottomSpacer = null; grid.replaceChildren();
   }
 
   function renderVirtualWindow(force = false) {
-    if (!grid.isConnected || !visiblePosts.length) {
-      grid.replaceChildren(); virtualStart = virtualEnd = 0; return;
-    }
+    if (!grid.isConnected || !visiblePosts.length) { resetTiles(); virtualStart = virtualEnd = 0; return; }
     const { columns, rowPitch, gap, padTop } = gridMetrics();
     virtualColumns = columns;
     const gridTop = grid.getBoundingClientRect().top + window.scrollY + padTop;
@@ -222,16 +283,25 @@
     const endRow = Math.min(totalRows, lastVisibleRow + VIRTUAL_OVERSCAN_ROWS + 1);
     const start = startRow * columns;
     const end = Math.min(visiblePosts.length, endRow * columns);
-    if (!force && start === virtualStart && end === virtualEnd) return;
+    if (!force && topSpacer && start === virtualStart && end === virtualEnd) return;
+    if (force || !topSpacer) {
+      resetTiles();
+      topSpacer = makeSpacer("virtual-spacer-top", 0); bottomSpacer = makeSpacer("virtual-spacer-bottom", 0);
+      grid.append(topSpacer, bottomSpacer);
+    }
     virtualStart = start; virtualEnd = end;
-    if (gridObserver) { gridObserver.disconnect(); gridObserver = null; }
-    const fragment = document.createDocumentFragment();
-    if (startRow > 0) fragment.append(makeSpacer("virtual-spacer-top", startRow * rowPitch - gap));
-    for (let i = start; i < end; i++) fragment.append(makeThumbnail(visiblePosts[i], i));
+    for (const [i, btn] of tiles) if (i < start || i >= end) { unwatchTile(btn); btn.remove(); tiles.delete(i); }
+    setSpacer(topSpacer, startRow > 0 ? startRow * rowPitch - gap : 0);
     const remainingRows = totalRows - endRow;
-    if (remainingRows > 0) fragment.append(makeSpacer("virtual-spacer-bottom", remainingRows * rowPitch - gap));
-    grid.replaceChildren(fragment);
-    setupLazyMedia();
+    setSpacer(bottomSpacer, remainingRows > 0 ? remainingRows * rowPitch - gap : 0);
+    const have = [...tiles.keys()].sort((x, y) => x - y), firstHave = have.length ? have[0] : null;
+    for (let i = start; i < end; i++) {
+      if (tiles.has(i)) continue;
+      const btn = makeThumbnail(visiblePosts[i], i);
+      if (firstHave !== null && i < firstHave) grid.insertBefore(btn, tiles.get(firstHave));
+      else grid.insertBefore(btn, bottomSpacer);
+      tiles.set(i, btn); watchTile(btn);
+    }
   }
 
   function scheduleVirtualRender(force = false) {
@@ -296,7 +366,7 @@
       const poster = posterCache.get(post.id); if (poster) video.poster = poster;
       // Show the thumbnail (poster / first frame) at once instead of a blank spinner screen.
       const wrap = document.createElement("div"); wrap.className = "video-stage";
-      const spin = document.createElement("div"); spin.className = "video-buffering"; spin.innerHTML = '<span class="spinner" aria-hidden="true"></span>';
+      const spin = document.createElement("div"); spin.className = "video-buffering"; spin.innerHTML = '<span class="spinner" aria-hidden="true"></span><span class="buffer-note"></span>';
       const playBtn = document.createElement("button"); playBtn.type = "button"; playBtn.className = "video-bigplay"; playBtn.setAttribute("aria-label", "Play reel"); playBtn.hidden = true;
       playBtn.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5v14l11-7z"></path></svg>';
       wrap.append(video, spin, playBtn); viewerMedia.replaceChildren(wrap);
@@ -323,8 +393,13 @@
         viewerMedia.replaceChildren(err);
       }, { once: true });
       const warmed = warmPool.get(post.id); if (warmed) { try { warmed.removeAttribute("src"); warmed.load(); } catch (_) {} warmPool.delete(post.id); }
+      const note = spin.querySelector(".buffer-note");
+      const slow = setTimeout(() => { if (current() && video.paused && video.readyState < 3) note.textContent = "Slow connection \u2014 still loading\u2026"; }, 7000);
+      video.addEventListener("canplay", () => { clearTimeout(slow); note.textContent = ""; }, { once: true });
+      video.addEventListener("playing", () => { clearTimeout(slow); note.textContent = ""; }, { once: true });
+      // Only after the main reel can play do we quietly pre-load the neighbours.
+      video.addEventListener("canplay", () => { if (current()) setTimeout(() => current() && warmNeighbours(post), 600); }, { once: true });
       video.src = url; busy(true); try { video.load(); } catch (_) {}
-      warmNeighbours(post);
     } else {
       const img = new Image();
       img.alt = `Hena post photograph${post.files.length > 1 ? ` ${fileIndex + 1} of ${post.files.length}` : ""}`;
@@ -349,7 +424,7 @@
   function openPost(id, updateUrl = true) {
     const post = byId.get(id); if (!post) return;
     activeId = id; activeMediaIndex = 0; opened = true; lastFocused = document.activeElement;
-    viewer.hidden = false; document.body.classList.add("viewer-open"); tilePaused = true;
+    viewer.hidden = false; document.body.classList.add("viewer-open"); pauseTileLoading();
     $("viewerCaption").replaceChildren(); $("viewerDate").textContent = post.timestamp || "";
     if (post.caption) {
       const username = document.createElement("span"); username.className = "caption-user"; username.textContent = "hennaah.11";
@@ -365,7 +440,7 @@
   function closeViewer(updateUrl = true) {
     if (!opened) return;
     opened = false; activeId = null; viewer.hidden = true; cleanupViewerMedia();
-    document.body.classList.remove("viewer-open"); tilePaused = false; pumpTiles();
+    document.body.classList.remove("viewer-open"); resumeTileLoading();
     if (updateUrl) updateUrlForPost(null, true);
     if (lastFocused && lastFocused.isConnected) lastFocused.focus({ preventScroll: true });
   }
