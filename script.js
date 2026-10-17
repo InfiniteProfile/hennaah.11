@@ -50,7 +50,11 @@
     media.className = "grid-media";
     media.dataset.src = mediaUrl(file);
     if (media.tagName === "IMG") { media.alt = ""; media.loading = "lazy"; media.decoding = "async"; media.fetchPriority = "low"; }
-    else { media.muted = true; media.playsInline = true; media.preload = "none"; media.setAttribute("aria-label", "Reel preview"); }
+    else {
+      media.muted = true; media.defaultMuted = true; media.playsInline = true;
+      media.preload = "none"; media.setAttribute("aria-label", "Video thumbnail");
+      media.setAttribute("aria-hidden", "true");
+    }
     button.append(media);
     if (post.type === "video") {
       const mark = document.createElement("span"); mark.className = "video-mark"; mark.setAttribute("aria-hidden", "true");
@@ -78,39 +82,113 @@
     }
     const src = el.dataset.src; delete el.dataset.src;
     if (el.tagName === "VIDEO") {
-      // A tiny muted preview is enough for the grid; full video loading waits until opening.
-      el.src = src; el.preload = "metadata";
-      el.addEventListener("error", () => { if (el.isConnected) el.classList.add("media-unavailable"); }, { once: true });
+      // Decode a real frame for each visible video tile, but do not play audio or keep it running.
+      // Only visible/near-visible videos get this request; virtualized rows release it when removed.
+      el.preload = prioritize ? "auto" : "metadata";
+      el.addEventListener("loadedmetadata", () => {
+        if (!el.isConnected || !Number.isFinite(el.duration) || el.duration <= 0) return;
+        try { el.currentTime = Math.min(0.12, el.duration / 3); } catch (_) {}
+      }, { once: true });
+      el.addEventListener("seeked", () => {
+        if (!el.isConnected) return;
+        el.classList.add("video-frame-ready");
+        try { el.pause(); } catch (_) {}
+      }, { once: true });
+      el.addEventListener("loadeddata", () => {
+        if (el.isConnected) el.classList.add("video-frame-ready");
+      }, { once: true });
+      el.addEventListener("error", () => { if (el.isConnected) el.closest(".grid-item")?.classList.add("media-unavailable"); }, { once: true });
+      el.src = src;
+      try { el.load(); } catch (_) {}
     } else {
       el.src = src;
       el.addEventListener("error", () => { if (el.isConnected) { el.closest(".grid-item")?.classList.add("media-unavailable"); el.removeAttribute("src"); } }, { once: true });
     }
   }
 
+  let virtualStart = -1, virtualEnd = -1, virtualFrame = 0;
+  const VIRTUAL_OVERSCAN_ROWS = 3;
+  let virtualColumns = 3;
+
+  function gridMetrics() {
+    const css = getComputedStyle(grid);
+    const profile = filter === "profile";
+    const columns = profile && window.innerWidth > 760 ? 4 : 3;
+    const gap = parseFloat(css.rowGap) || 0;
+    const padTop = parseFloat(css.paddingTop) || 0;
+    const padLeft = parseFloat(css.paddingLeft) || 0;
+    const padRight = parseFloat(css.paddingRight) || 0;
+    const usableWidth = Math.max(1, grid.clientWidth - padLeft - padRight);
+    const colGap = parseFloat(css.columnGap) || 0;
+    const tile = (usableWidth - (columns - 1) * colGap) / columns;
+    return { columns, rowPitch: tile + gap, gap, padTop };
+  }
+
   function setupLazyMedia() {
     if (gridObserver) gridObserver.disconnect();
     const targets = grid.querySelectorAll("[data-src]");
-    if (!("IntersectionObserver" in window)) { targets.forEach(loadThumbnail); return; }
+    if (!("IntersectionObserver" in window)) { targets.forEach(el => loadThumbnail(el, true)); return; }
     gridObserver = new IntersectionObserver(entries => {
       for (const entry of entries) if (entry.isIntersecting) {
-        // Visible/near-visible tiles get requested before anything farther down the page.
         loadThumbnail(entry.target, entry.intersectionRatio > 0);
         gridObserver.unobserve(entry.target);
       }
-    }, { rootMargin: "500px 0px", threshold: 0.01 });
+    }, { rootMargin: "280px 0px", threshold: 0.01 });
     targets.forEach(el => gridObserver.observe(el));
+  }
+
+  function makeSpacer(className, height) {
+    const spacer = document.createElement("div");
+    spacer.className = `virtual-spacer ${className}`;
+    spacer.setAttribute("aria-hidden", "true");
+    spacer.style.height = `${Math.max(0, height)}px`;
+    spacer.style.gridColumn = "1 / -1";
+    spacer.style.pointerEvents = "none";
+    return spacer;
+  }
+
+  function renderVirtualWindow(force = false) {
+    if (!grid.isConnected || !visiblePosts.length) {
+      grid.replaceChildren(); virtualStart = virtualEnd = 0; return;
+    }
+    const { columns, rowPitch, gap, padTop } = gridMetrics();
+    virtualColumns = columns;
+    const gridTop = grid.getBoundingClientRect().top + window.scrollY + padTop;
+    const relativeTop = Math.max(0, window.scrollY - gridTop);
+    const relativeBottom = Math.max(0, window.scrollY + window.innerHeight - gridTop);
+    const firstVisibleRow = Math.floor(relativeTop / Math.max(1, rowPitch));
+    const lastVisibleRow = Math.ceil(relativeBottom / Math.max(1, rowPitch));
+    const totalRows = Math.ceil(visiblePosts.length / columns);
+    const startRow = Math.max(0, firstVisibleRow - VIRTUAL_OVERSCAN_ROWS);
+    const endRow = Math.min(totalRows, lastVisibleRow + VIRTUAL_OVERSCAN_ROWS + 1);
+    const start = startRow * columns;
+    const end = Math.min(visiblePosts.length, endRow * columns);
+    if (!force && start === virtualStart && end === virtualEnd) return;
+    virtualStart = start; virtualEnd = end;
+    if (gridObserver) { gridObserver.disconnect(); gridObserver = null; }
+    const fragment = document.createDocumentFragment();
+    if (startRow > 0) fragment.append(makeSpacer("virtual-spacer-top", startRow * rowPitch - gap));
+    for (let i = start; i < end; i++) fragment.append(makeThumbnail(visiblePosts[i], i));
+    const remainingRows = totalRows - endRow;
+    if (remainingRows > 0) fragment.append(makeSpacer("virtual-spacer-bottom", remainingRows * rowPitch - gap));
+    grid.replaceChildren(fragment);
+    setupLazyMedia();
+  }
+
+  function scheduleVirtualRender(force = false) {
+    if (virtualFrame) cancelAnimationFrame(virtualFrame);
+    virtualFrame = requestAnimationFrame(() => {
+      virtualFrame = 0;
+      renderVirtualWindow(force);
+    });
   }
 
   function renderGrid(nextFilter, updateUrl = true) {
     filter = ({ photos: "posts", all: "profile" })[nextFilter] || nextFilter;
     visiblePosts = filter === "videos" ? videos : filter === "profile" ? profileItems : posts;
     grid.classList.toggle("profile-grid", filter === "profile");
-    if (gridObserver) { gridObserver.disconnect(); gridObserver = null; }
-    grid.replaceChildren();
-    const fragment = document.createDocumentFragment();
-    visiblePosts.forEach((post, i) => fragment.append(makeThumbnail(post, i)));
-    grid.append(fragment);
-    setupLazyMedia();
+    virtualStart = virtualEnd = -1;
+    renderVirtualWindow(true);
     document.querySelectorAll(".tab").forEach(tab => {
       const active = tab.dataset.filter === filter;
       tab.classList.toggle("active", active); tab.setAttribute("aria-pressed", String(active));
@@ -260,7 +338,11 @@
     }
   });
 
-  // Render the complete filtered grid in one pass; only near-viewport thumbnails fetch media.
+  // Virtual scrolling: keep only visible rows plus a small buffer in the DOM.
+  // Scrolling either direction replaces off-screen rows, releasing their video/media elements.
+  window.addEventListener("scroll", () => scheduleVirtualRender(false), { passive: true });
+  window.addEventListener("resize", () => scheduleVirtualRender(true), { passive: true });
+
   const initialUrl = new URL(location.href);
   const initialPostId = initialUrl.searchParams.get("post");
   const initialFilter = normalizeFilter(initialUrl.searchParams.get("filter") || "posts");

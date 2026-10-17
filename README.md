@@ -86,3 +86,11 @@ No Node.js, build step, database, backend, or paid hosting is required.
 - PROFILE is separate: every individual image file becomes one round, cropped photo tile. It does not group image variants, and it does not treat a multi-photo post as one profile.
 - Video files are excluded from PROFILE because this section represents photo-based profile tiles; videos remain available in POSTS and REELS.
 - Loading order is prioritized, but actual speed still depends on GitHub raw delivery, network quality, and the original media file sizes.
+
+
+## Video thumbnails and virtual scrolling (latest update)
+
+- Video tiles now request and decode a real frame after metadata is available, seek a tiny amount into the clip, then pause. Tiles are muted and use no native controls; the custom video icon remains overlaid. This makes actual thumbnail frames visible when the browser/CDN supports byte-range media access.
+- The grid is virtualized: it renders only the rows near the viewport plus a small overscan buffer. Rows far above/below are removed from the DOM and rebuilt when scrolling back, reducing DOM size and releasing off-screen video elements. The same system works while scrolling down or up.
+- Images and video thumbnails still use intersection-based loading, with a tighter near-viewport window. The clicked post viewer remains high priority.
+- Some MP4s may still show a neutral tile if GitHub's raw delivery, a codec, or the browser prevents frame decoding; a static poster image is not available in the supplied filename-only dataset.
