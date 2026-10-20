@@ -489,11 +489,11 @@ const MEDIA_FILES = [
   "igexport-DejBtLPDInv-8.jpg",
   "igexport-DejBtLPDInv-9.jpg",
   "igexport-DejBtLPDInv.jpg",
-  "igexport-DejlndGMAdX.mp4"
+  "igexport-DejlndGMAdX.mp4",
   "Post/4_5961773932401920917.mp4"
 ];
 function mediaType(filename) {
-  return /\.(mp4|webm)$/i.test(filename) ? "video" : "image";
+  return /\.(mp4|webm|mov|m4v)$/i.test(String(filename).split(/[?#]/)[0]) ? "video" : "image";
 }
 function stableId(filename) {
   let hash = 2166136261;
@@ -527,17 +527,59 @@ function buildPosts() {
   }
   return result;
 }
-const posts = buildPosts();
+let posts = buildPosts();
 // PROFILE is intentionally a one-file-per-item avatar gallery. Unlike POSTS,
 // it never groups similarly named image variants into carousels.
-const profileItems = MEDIA_FILES.slice().reverse()
+let profileItems = MEDIA_FILES.slice().reverse()
   .filter(file => mediaType(file) === "image")
   .map(file => ({ id: "profile-" + stableId(file), type: "image", files: [file], caption: "", timestamp: "" }));
+
+// ===========================================================================
+//  posts.txt  -  paste links, separated by $ . Photo/video is detected automatically.
+//  The TOP of posts.txt is the NEWEST post. Several photo links inside one $ block = one swipeable carousel.
+// ===========================================================================
+const REPO_SLUG = "InfiniteProfile/hennaah.11";
+function normalizeLink(raw) {
+  let url = String(raw).trim().replace(/[)\]>,;"']+$/, "");
+  let m = url.match(/^https?:\/\/(?:www\.)?github\.com\/([^/]+)\/([^/]+)\/(?:blob|raw)\/([^/]+)\/(.+)$/i);
+  if (m) {
+    const path = m[4].split(/[?#]/)[0];
+    if ((m[1] + "/" + m[2]).toLowerCase() === REPO_SLUG.toLowerCase() && m[3] === "main") return decodeURIComponent(path);
+    return "https://raw.githubusercontent.com/" + m[1] + "/" + m[2] + "/" + m[3] + "/" + path;
+  }
+  m = url.match(/^https?:\/\/raw\.githubusercontent\.com\/([^/]+)\/([^/]+)\/([^/]+)\/(.+)$/i);
+  if (m && (m[1] + "/" + m[2]).toLowerCase() === REPO_SLUG.toLowerCase() && m[3] === "main") return decodeURIComponent(m[4].split(/[?#]/)[0]);
+  return url;
+}
+function parseLinkPosts(text) {
+  const clean = String(text || "").replace(/^﻿/, "").split(/\r?\n/).filter(l => !/^\s*#/.test(l)).join("\n");
+  const known = new Set(MEDIA_FILES);
+  const out = [];
+  for (const block of clean.split("$")) {
+    const links = (block.match(/https?:\/\/[^\s$]+/g) || []).map(normalizeLink).filter(f => f && !known.has(f));
+    const photos = links.filter(f => mediaType(f) === "image");
+    if (photos.length) out.push({ id: stableId("txt:" + photos.join("|")), type: "image", files: photos, caption: "", timestamp: "" });
+    links.filter(f => mediaType(f) === "video").forEach(f => out.push({ id: stableId(f), type: "video", files: [f], caption: "", timestamp: "" }));
+  }
+  return out;
+}
+function applyLinkPosts(text) {
+  const extra = parseLinkPosts(text);
+  if (!extra.length) return;
+  const seen = new Set();
+  const uniq = extra.filter(p => !seen.has(p.id) && seen.add(p.id));
+  posts = [...uniq, ...posts];
+  const singles = [];
+  uniq.forEach(p => { if (p.type === "image") p.files.forEach(f => singles.push({ id: "profile-" + stableId(f), type: "image", files: [f], caption: "", timestamp: "" })); });
+  profileItems = [...singles, ...profileItems];
+}
+const postsReady = fetch("posts.txt", { cache: "no-cache" }).then(r => r.ok ? r.text() : "").catch(() => "");
 // Media is tried from a fast CDN first (jsDelivr: global edge cache, proper range requests),
 // and falls back to GitHub raw automatically if a file is missing/too large (>50 MB) there.
 const MEDIA_MIRRORS = ["https://cdn.jsdelivr.net/gh/InfiniteProfile/hennaah.11@main/", MEDIA_BASE];
 function mediaUrls(filename) {
-  const path = filename.split("/").map(part => encodeURIComponent(part)).join("/");
+  if (/^https?:\/\//i.test(filename)) return [filename];   // full link from posts.txt (other repos / hosts)
+  const path =filename.split("/").map(part => encodeURIComponent(part)).join("/");
   return MEDIA_MIRRORS.map(base => base + path);
 }
 function mediaUrl(filename) { return mediaUrls(filename)[0]; }
@@ -546,5 +588,6 @@ function mediaUrl(filename) { return mediaUrls(filename)[0]; }
 // Every caller falls back to the original file if this service is unreachable.
 function imageVariant(filename, width, quality) {
   const path = filename.split("/").map(part => encodeURIComponent(part)).join("/");
-  return "https://wsrv.nl/?url=" + encodeURIComponent(MEDIA_BASE + path) + "&w=" + width + "&q=" + quality + "&output=webp&we";
+  const source = /^https?:\/\//i.test(filename) ? filename : MEDIA_BASE + path;
+  return "https://wsrv.nl/?url=" + encodeURIComponent(source) + "&w=" + width + "&q=" + quality + "&output=webp&we";
 }

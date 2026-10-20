@@ -1,4 +1,4 @@
-(() => {
+(async () => {
   "use strict";
   const $ = id => document.getElementById(id);
   const grid = $("grid"), viewer = $("viewer"), viewerMedia = $("viewerMedia");
@@ -8,6 +8,9 @@
     img.src = urls[0];
   }
   setAvatar($("profilePhoto")); setAvatar($("viewerAvatar"));
+
+  // Links pasted into posts.txt (separated by $) are added above the built-in posts.
+  try { applyLinkPosts(await postsReady); } catch (_) {}
 
   const photos = posts.filter(post => post.type === "image");
   const videos = posts.filter(post => post.type === "video");
@@ -33,7 +36,7 @@
     const meta = $("themeColorMeta"); if (meta) meta.content = dark ? "#000000" : "#ffffff";
   }
 
-  function isVideo(file) { return /\.(mp4|webm)$/i.test(file); }
+  function isVideo(file) { return mediaType(file) === "video"; }
   function normalizeFilter(value) { return ({ photos: "posts", all: "profile" })[value] || value; }
   function updateUrlForPost(post, push = true) {
     const u = new URL(location.href);

@@ -94,3 +94,17 @@ No Node.js, build step, database, backend, or paid hosting is required.
 - The grid is virtualized: it renders only the rows near the viewport plus a small overscan buffer. Rows far above/below are removed from the DOM and rebuilt when scrolling back, reducing DOM size and releasing off-screen video elements. The same system works while scrolling down or up.
 - Images and video thumbnails still use intersection-based loading, with a tighter near-viewport window. The clicked post viewer remains high priority.
 - Some MP4s may still show a neutral tile if GitHub's raw delivery, a codec, or the browser prevents frame decoding; a static poster image is not available in the supplied filename-only dataset.
+
+
+## posts.txt — add posts by pasting links (no code editing)
+
+Open `posts.txt` and paste links to photos or videos. Photo vs. video is detected automatically from the file extension.
+
+- Separate posts with a dollar sign (`$`).
+- The **top** of the file is the **newest** post (it appears first in the grid).
+- Several **photo** links inside one `$` block become one swipeable carousel. Video links are always separate reels.
+- GitHub links (`github.com/.../blob/main/...`), raw links, and any other direct `https://` photo/video links work as they are.
+- Lines starting with `#` are comments and are ignored.
+- A link that is already listed in `posts.js` is skipped so it never shows twice.
+
+Upload `posts.txt` next to `index.html`. It needs GitHub Pages (or any web server); opening `index.html` directly from disk blocks the file read.
