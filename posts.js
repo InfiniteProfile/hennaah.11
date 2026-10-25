@@ -493,7 +493,11 @@ const MEDIA_FILES = [
   "Post/4_5961773932401920917.mp4"
 ];
 function mediaType(filename) {
-  return /\.(mp4|webm|mov|m4v)$/i.test(String(filename).split(/[?#]/)[0]) ? "video" : "image";
+  // Repo filenames (decoded from posts.txt) may legitimately contain "#" or "?" (e.g. "#fyp.mp4"),
+  // so only strip ?query / #fragment from real http(s) URLs, never from repo-relative paths.
+  const name = String(filename);
+  const clean = /^https?:\/\//i.test(name) ? name.split(/[?#]/)[0] : name;
+  return /\.(mp4|webm|mov|m4v)$/i.test(clean) ? "video" : "image";
 }
 function stableId(filename) {
   let hash = 2166136261;
